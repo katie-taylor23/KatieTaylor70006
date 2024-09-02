@@ -1,0 +1,43 @@
+---
+title: "Pangaea"
+format: html
+editor: visual
+---
+
+## Preprocessing
+
+This is a very brief introduction into the literature mining completed for this project. There is still much to be done with this aspect.
+
+#### Step 1
+
+```{bash}
+# Using GENWALK on MCF7 up regulated genes
+#PBS -l walltime=24:00:00
+#PBS -l select=1:ncpus=8:mem=48gb
+
+# Set working directory
+cd $PBS_0_WORKDIR
+
+# Load appropriate modules
+module load PANGAEA/0.2.1
+module load EDIRECT/1.0
+
+# Define the command
+esearch -db pubmed -sort Relevance -query "interferon OR IFN" | efetch -format xml > isg_papers.xml
+```
+
+#### Step 2
+
+```{bash}
+# Using GENWALK on MCF7 up regulated genes
+#PBS -l walltime=72:00:00
+#PBS -l select=1:ncpus=16:mem=160gb
+
+# Set working directory
+cd $PBS_0_WORKDIR
+
+# Load appropriate modules
+module load PANGAEA5/0.2.1
+
+pangaea local --output=output_isgsjul16.xml --genes=mcf7_genes_list.txt --relations=/rds/general/user/kmt23/home/isg_stems_mcf7.csv --cores=16 --synonyms=default isg_papers.xml
+```

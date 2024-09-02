@@ -590,6 +590,31 @@ fq_4=$(awk -v taskID=${PBS_ARRAY_INDEX} '$1==taskID {print $5}' ${list})
 TOBIAS PlotAggregate --TFBS ${inputdir}/${fq_3} ${inputdir}/${fq_4} --signals ${inputdir}/Tobias/${fq_1}_corrected.bw ${inputdir}/Tobias/${fq_2}_corrected.bw --output /rds/general/user/kmt23/ephemeral/data/SAM_ATAC/ATAC/Tobias/plotting/BATF_footprint_comparison_subsets.png --share_y both --plot_boundaries
 ```
 
+```{bash}
+# TF footprinting with TOBIAS
+#PBS -l walltime=24:00:00
+#PBS -l select=1:ncpus=8:mem=32gb
+
+# Load appropriate modules
+module load TOBIAS/0.14.0
+module load BEDTOOLS/2.31.1
+
+# Set working directory
+cd $PBS_0_WORKDIR
+
+inputdir=/rds/general/user/kmt23/ephemeral/data/SAM_ATAC/ATAC
+outputdir=/rds/general/user/kmt23/ephemeral/data/SAM_ATAC/ATAC/Tobias
+list=/rds/general/user/kmt23/home/jobs/array_lists/Tobias_array.txt
+fq_1=$(awk -v taskID=${PBS_ARRAY_INDEX} '$1==taskID {print $2}' ${list})
+fq_2=$(awk -v taskID=${PBS_ARRAY_INDEX} '$1==taskID {print $3}' ${list})
+fq_3=$(awk -v taskID=${PBS_ARRAY_INDEX} '$1==taskID {print $4}' ${list})
+
+cat /rds/general/user/kmt23/home/jobs/tobias/NFR/YMM_MACS1_0A5L_01JKMRC_BrCa-TREATED-1_ATAC_hs_i201_r1.fastq.sam_noM.bam_ASF.bam_MACS_ATACSeq_NFR_Peaks_peaks.bed /rds/general/user/kmt23/home/jobs/tobias/NFR/YMM_MACS2_0A5M_01JKMRC_BrCa-TREATED-2_ATAC_hs_i202_r1.fastq.sam_noM.bam_ASF.bam_MACS_ATACSeq_NFR_Peaks_peaks.bed /rds/general/user/kmt23/home/jobs/tobias/NFR/YMM_MACS3_0A5N_01JKMRC_BrCa-CONTROL-1_ATAC_hs_i203_r1.fastq.sam_noM.bam_ASF.bam_MACS_ATACSeq_NFR_Peaks_peaks.bed /rds/general/user/kmt23/home/jobs/tobias/NFR/YMM_MACS4_0A5O_01JKMRC_BrCa-CONTROL-2_ATAC_hs_i204_r1.fastq.sam_noM.bam_ASF.bam_MACS_ATACSeq_NFR_Peaks_peaks.bed > /rds/general/user/kmt23/home/jobs/tobias/NFR/atac_mcf7_merged_allNFRpeaks.bed
+sort -k1,1 -k2,2n /rds/general/user/kmt23/home/jobs/tobias/NFR/atac_mcf7_merged_allNFRpeaks.bed > /rds/general/user/kmt23/home/jobs/tobias/NFR/atac_mcf7_merged_allNFRpeakssorted.bed
+
+TOBIAS BINDetect --motifs /rds/general/user/kmt23/home/src/motif_databases/HOCOMOCO/H12CORE_meme_format.meme --signals /rds/general/user/kmt23/home/jobs/tobias/Tobias/sorted_sorted_2_0A5M_01JKMRC_BrCa-TREATED-2_ATAC_hs_i202_r1.fastq.sam_noM.bam_noB_footprints.bw /rds/general/user/kmt23/home/jobs/tobias/Tobias/sorted_sorted_3_0A5N_01JKMRC_BrCa-CONTROL-1_ATAC_hs_i203_r1.fastq.sam_noM.bam_noB_footprints.bw --genome /rds/general/user/kmt23/home/src/hg38/hg38p.fa --peaks /rds/general/user/kmt23/home/jobs/tobias/NFR/atac_mcf7_merged_allNFRpeakssorted.bed --outdir ~/jobs/tobias --cond_names Treated Untreated --cores 8 --outdir ~/jobs/tobias/BINDetect_MCF7_output
+```
+
 You can add options to executable code like this
 
 ```{r}
