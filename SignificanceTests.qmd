@@ -1,0 +1,601 @@
+---
+title: "Knowledge Graph Katie Taylor MSc"
+format: html
+editor: visual
+---
+
+```{r}
+library(dplyr)
+library(biomart)
+library(readr)
+```
+
+# Significance Tests
+
+Okay so some of the significance tests included in this thesis were created after the fact. We include them here.
+
+### RNA-seq
+
+```{r}
+mcf7 <- read_csv("/Users/katietaylor/Downloads/mcf7_results_sig_hgnc.csv")
+mcf7all <- read_csv("/Users/katietaylor/70006/RNA_DE_mcf7/mcf7_RNA_results_all_hgnc.csv")
+
+# testing whether log2FoldChange was significantly above 0 (more upregulated than downregulated)
+wilcox.test(mcf7$log2FoldChange, mu = 0)
+wilcox.test(mcf7all$log2FoldChange, mu = 0)
+
+mcf7_down <- mcf7 %>%
+  dplyr::filter(log2FoldChange < 0)
+View(mcf7_down)
+
+
+# testing for significant overlap between MCF7 DEGs and ISGverse ISGs
+
+k <- 692          # Number of successes (overlap)
+n <- 5287         # Total number in Group A
+K <- 1092          # Total number in Group B
+N <- 22504         # Total population (sum of both groups minus overlap)
+
+# Calculate the p-value using the hypergeometric test
+p_value <- phyper(k - 1, K, N - K, n, lower.tail = FALSE)
+print(p_value)
+
+View(mcf7all)
+
+contingency_table <- matrix(c(k, n - k, K - k, N - K - (n - k)), 
+                            nrow = 2, 
+                            byrow = TRUE, 
+                            dimnames = list("Group A" = c("Present", "Absent"),
+                                            "Group B" = c("Present", "Absent")))
+
+# Fisher's Exact Test
+fisher_test <- fisher.test(contingency_table)
+print(fisher_test)
+```
+
+### ChIP- and ATAC-seq
+
+We did the same thing for the second test here, where I tested whether the Fold Change was significantly different than 1.
+
+```{r}
+load("/Users/katietaylor/Downloads/chip_mcf7_H3K4Me3_dba.DB.RData")
+load("/Users/katietaylor/Downloads/chip_mcf7_H3K4Me1_dba.DB.RData")
+load("/Users/katietaylor/Downloads/chip_mcf7_H3K27Ac_dba.DB.RData")
+load("/Users/katietaylor/70006/ATAC_mcf7/MACS2C_db_GRANGES.rds")
+
+H3K4Me3 <- as.data.frame(chip_mcf7_H3K4Me3_dba.DB) %>%
+  dplyr::filter(FDR <= 0.05)
+H3K4Me1 <- as.data.frame(chip_mcf7_H3K4Me1_dba.DB) %>%
+  dplyr::filter(FDR <= 0.05)
+H3K27Ac <- as.data.frame(chip_mcf7_H3K27Ac_dba.DB) %>%
+  dplyr::filter(FDR <= 0.05)
+ATAC <- read_csv("/Users/katietaylor/70006/ATAC_mcf7/anno_df_macs2c.csv")%>%
+  dplyr::filter(FDR <= 0.05)
+
+wilcox.test(H3K4Me3$Fold, mu = 1)
+wilcox.test(H3K4Me1$Fold, mu = 1)
+wilcox.test(H3K27Ac$Fold, mu = 1)
+wilcox.test(ATAC$Fold, mu = 1)
+
+H3K4Me3_up <- H3K4Me3 %>%
+  dplyr::filter(Fold > 1)
+H3K4Me3_down <- H3K4Me3 %>%
+  dplyr::filter(Fold < 1)
+wilcox.test(H3K4Me3_down$Conc, H3K4Me3_up$Conc)
+mean(H3K4Me3_down$Conc)
+mean(H3K4Me3_up$Conc)
+
+H3K4Me1_up <- H3K4Me1 %>%
+  dplyr::filter(Fold > 1)
+H3K4Me1_down <- H3K4Me1 %>%
+  dplyr::filter(Fold < 1)
+wilcox.test(H3K4Me1_down$Conc, H3K4Me1_up$Conc)
+mean(H3K4Me1_down$Conc)
+mean(H3K4Me1_up$Conc)
+
+H3K27Ac_up <- H3K27Ac %>%
+  dplyr::filter(Fold > 1)
+H3K27Ac_down <- H3K27Ac %>%
+  dplyr::filter(Fold < 1)
+wilcox.test(H3K27Ac_down$Conc, H3K27Ac_up$Conc)
+mean(H3K27Ac_down$Conc)
+mean(H3K27Ac_up$Conc)
+
+ATAC_up <- ATAC %>%
+  dplyr::filter(Fold > 1)
+ATAC_down <- ATAC %>%
+  dplyr::filter(Fold < 1)
+wilcox.test(ATAC_down$Conc, ATAC_up$Conc)
+mean(ATAC_down$Conc)
+mean(ATAC_up$Conc)
+```
+
+### Hi-C
+
+```{r}
+forty <- read_csv("/Users/katietaylor/70006/HIC/diff_hiccompare40k.csv")
+twenty <- read_csv("/Users/katietaylor/70006/HIC/diff_hiccompare20k.csv")
+
+wilcox.test(forty$Z, mu = 0)
+wilcox.test(twenty$Z, mu = 0)
+```
+
+# Working with the Knowledge Graph after its creation
+
+## Annotating DEGs in Knowledge graph for certain types of genes
+
+This would help us find out that certain classes, such as transcription factors were overrepresented in our DEGs and iDEGs. All data sets were downloaded online; more details are given in the methods section.
+
+```{r}
+## read in DEGs
+mcf7_hgnc <- read_csv("/Users/katietaylor/Downloads/mcf7_results_sig_hgnc.csv")
+## First we did this with cosmic for oncogenes
+
+#read in the downloaded dataset
+cosmic <- read_csv("/Users/katietaylor/Downloads/Census_allSun Jul 14 21_19_24 2024.csv") %>%
+  dplyr::rename(gene_symbol = "Gene Symbol")
+# filter such that gene must be in both lists to be included
+mcf7_onco <- mcf7_hgnc %>%
+  dplyr::filter(hgnc_symbol %in% cosmic$gene_symbol)
+cosmic_mcf7 <- cosmic %>%
+  dplyr::filter(gene_symbol %in% mcf7_hgnc$hgnc_symbol)
+# write csv file
+write_csv(cosmic_mcf7, "~/70006/cosmic_mcf7.csv")
+
+## Then we did this with cosmic for fusion genes
+
+fusion <- read.delim("/Users/katietaylor/Downloads/Cosmic_Fusion_Tsv_v100_GRCh38/Cosmic_Fusion_v100_GRCh38.tsv", header = TRUE, sep = "\t")
+#remove ensemblid transcript version IDs
+five_prime <- removeVersion(fusion$FIVE_PRIME_TRANSCRIPT_ID) 
+three_prime <- removeVersion(fusion$THREE_PRIME_TRANSCRIPT_ID)
+ensembl_g_id <- mcf7_hgnc$ensembl_gene_id
+# get ensembl gene IDs from biomaRT getBM
+ensembl <- useEnsembl(biomart = "genes", dataset = "hsapiens_gene_ensembl", mirror = "www")
+transcript_ID <- getBM(attributes = c("ensembl_transcript_id", "ensembl_gene_id"),
+                 filters = "ensembl_gene_id", 
+                 values = ensembl_g_id, 
+                 mart = ensembl)
+
+# filter such that gene must be in both lists
+mcf7_hgnc_transcript <- dplyr::full_join(mcf7_hgnc, transcript_ID, by = "ensembl_gene_id") %>%
+  dplyr::filter(ensembl_transcript_id %in% five_prime | ensembl_transcript_id %in% three_prime)
+write_csv(mcf7_hgnc_transcript, "~/70006/mcf7_fusion_genes.csv")
+
+## then we did this with tumour suppressor genes
+TSGs <- read.delim("/Users/katietaylor/Downloads/Human_TSGs.txt", header = TRUE, sep = "\t")
+mcf7_hgnc_TSGs <- mcf7_hgnc %>%
+  dplyr::filter(hgnc_symbol %in% TSGs$GeneSymbol)
+write_csv(mcf7_hgnc_TSGs, "~/70006/mcf7_TSGs.csv")
+
+## then with mitochondrial genes
+mitogenes <- read_csv("/Users/katietaylor/Downloads/Human.MitoCarta3.0.csv")
+mcf7_mitogenes <- mcf7_hgnc %>%
+  dplyr::filter(hgnc_symbol %in% mitogenes$HumanGeneID)
+write_csv(mcf7_mitogenes, "~/70006/mcf7_mitogenes.csv")
+
+## then needed to do something a bit different for enzymes
+
+# first got the uniprot ID from biomaRt
+uniprot_mapping <- getBM(attributes = c('ensembl_gene_id', 'uniprotswissprot', 'uniprot_gn_symbol'),
+                         filters = 'ensembl_gene_id', values = ensembl_g_id, mart = ensembl)
+
+# created a function to say whether or not the gene was an enzyme
+is_enzyme <- function(uniprot_id) {
+  url <- paste0("https://www.uniprot.org/uniprot/", uniprot_id, ".txt")
+  entry <- readLines(url, warn = FALSE)
+  return(any(grepl("EC=", entry)))
+}
+enzyme_entries <- uniprot_mapping[uniprot_mapping$uniprotswissprot != "", ]
+enzyme_entries$is_enzyme <- sapply(enzyme_entries$uniprotswissprot, is_enzyme)
+enzymes <- enzyme_entries[enzyme_entries$is_enzyme == TRUE, ]
+# wrote csv file
+write_csv(enzymes, "~/70006/mcf7_enzymes.csv")
+```
+
+## Annotating for all genes
+
+Originally, only DEGs were annotated to interaction anchors, with the original intent to perform a regression prediction with the GAT. This yielded very low accuracy, so we pivoted to predicting gene versus not gene versus DEG
+
+```{r}
+library(ChIPpeakAnno)
+library(GenomicRanges)
+library(biomaRt)
+
+# first, we need to know that we are looking at both significant (fithictr) and differential (hicompare) interactions
+
+vers <- list("fithictr", "hicompare_")
+
+# create a giant loop for fithic and hicompare
+for (ver in vers) {
+# df is for 20 kb resolution
+  df <- read_csv(paste0("/Users/katietaylor/Library/Application Support/Neo4j Desktop/Application/relate-data/dbmss/dbms-2356fdc8-0767-4eee-88a9-1f29bc05e574/import/neo4j_", ver, "20.csv"))
+  # dfc is for 40 kb resolution
+dfc<- read_csv(paste0("/Users/katietaylor/Library/Application Support/Neo4j Desktop/Application/relate-data/dbmss/dbms-2356fdc8-0767-4eee-88a9-1f29bc05e574/import/neo4j_", ver, "40.csv"))
+
+# per previous integration steps, some regions are denoted by "A" and some are denoted by "B". For instance, one region might have chromosomeA, startA, and endA, and another would have chromosomeB, startB, and endB. They denote either end of the interaction.
+
+# A regions at 20kb
+df <- df %>%
+  filter(!is.na(chromosomeA))
+# A regions at 40 kb
+dfc <- dfc %>%
+  filter(!is.na(chromosomeA))
+
+# splitting to create a BED file
+# 20 kb A
+df_splitan <- df %>%
+  dplyr::mutate(name = paste0("newInt", 1:nrow(df)))
+df_splita <- df_splitan %>%
+  dplyr::select(chromosomeA, startA, endA, name) 
+
+# 20 kb B
+df_splitbn <- df %>%
+  dplyr::mutate(name = paste0("newInt", 1:nrow(df)))
+df_splitb <- df_splitbn %>%
+  dplyr::select(chromosomeB, startB, endB, name) 
+ 
+# 40 kb A
+dfc_splitan <- dfc %>%
+  dplyr::mutate(name = paste0("newInt", 1:nrow(dfc)))
+dfc_splita <- dfc_splitan %>%
+  dplyr::select(chromosomeA, startA, endA, name) 
+
+# 40 kb B
+dfc_splitbn <- dfc %>%
+  dplyr::mutate(name = paste0("newInt", 1:nrow(dfc)))
+dfc_splitb <- dfc_splitbn %>%
+  dplyr::select(chromosomeB, startB, endB, name)
+
+# now creating bed files for the four sets of anchors (20, 40 x A, B)
+df_splita_bed <- data.frame(chromosome = 
+                              df_splita$chromosomeA, start = 
+                              df_splita$startA - 1, end = 
+                              df_splita$endA, name = 
+                              df_splita$name, score = 0, strand = '.')
+
+
+df_splitb_bed <- data.frame(chromosome = 
+                              df_splitb$chromosomeB, start = 
+                              df_splitb$startB - 1, end = 
+                              df_splitb$endB, name = 
+                              df_splitb$name, score = 0, strand = '.')
+
+dfc_splita_bed <- data.frame(chromosome = 
+                              dfc_splita$chromosomeA, start = 
+                              dfc_splita$startA - 1, end = 
+                              dfc_splita$endA, name = 
+                              dfc_splita$name, score = 0, strand = '.')
+
+dfc_splitb_bed <- data.frame(chromosome = 
+                              dfc_splitb$chromosomeB, start = 
+                              dfc_splitb$startB - 1, end = 
+                              dfc_splitb$endB, name = 
+                              dfc_splitb$name, score = 0, strand = '.')
+
+
+## adding in bed file for all genes, not just DE
+ensembl <- useEnsembl(biomart = "genes", dataset = "hsapiens_gene_ensembl")
+mcf7_genesa <- read_csv("/Users/katietaylor/70006/RNA_DE_mcf7/mcf7_RNA_results_all_hgnc.csv")
+
+
+mcf7_genes <- mcf7_genesa %>%
+  dplyr::select(ensembl_gene_id)
+
+
+ensembl_ids <- mcf7_genes$ensembl_gene_id
+
+genes <- getBM(
+  attributes = c('ensembl_gene_id', 'chromosome_name', "transcription_start_site", 'strand'),
+  filters = 'ensembl_gene_id',
+  values = ensembl_ids,
+  mart = ensembl
+)
+
+# extending on either side by 500 bp. Next time I would do less
+bed_data <- data.frame(chromosome = genes$chromosome_name, start = genes$transcription_start_site - 500, end = genes$transcription_start_site + 500, name = genes$ensembl_gene_id, score = 0, strand = ifelse(genes$strand == 1, "+", "-"))
+
+
+bed_data_unique <- bed_data %>%
+  distinct(name, .keep_all = TRUE)
+# creating GRanges objects for each of the anchor sets
+hicTRA <- toGRanges(df_splita_bed, format = 'BED') # 20A
+hicTRB <- toGRanges(df_splitb_bed, format = 'BED') # 20B
+hicTRAc <- toGRanges(dfc_splita_bed, format = 'BED') # 40A
+hicTRBc <- toGRanges(dfc_splitb_bed, format = 'BED') # 40B
+
+# GRanges object for ensembl ID
+mcf7_de_gr <- toGRanges(bed_data_unique, format = 'BED')
+
+# key annotation step
+hicTRA_anno <- annotatePeakInBatch(myPeakList = hicTRA, AnnotationData = mcf7_de_gr, output = 'overlapping', multiple = TRUE)
+hicTRB_anno <- annotatePeakInBatch(myPeakList = hicTRB, AnnotationData = mcf7_de_gr, output = 'overlapping', multiple = TRUE)
+hicTRAc_anno <- annotatePeakInBatch(myPeakList = hicTRAc, AnnotationData = mcf7_de_gr, output = 'overlapping', multiple = TRUE)
+hicTRBc_anno <- annotatePeakInBatch(myPeakList = hicTRBc, AnnotationData = mcf7_de_gr, output = 'overlapping', multiple = TRUE)
+
+# converting to dataframe
+hicTRA_ann <- as.data.frame(hicTRA_anno)
+hicTRB_ann <- as.data.frame(hicTRB_anno)
+
+hicTRAc_ann <- as.data.frame(hicTRAc_anno)
+hicTRBc_ann <- as.data.frame(hicTRBc_anno)
+
+# creating a new difcase column
+hicTRA_annb <- hicTRA_ann %>%
+  dplyr::rename(ensembl_gene_id = feature) %>%
+  full_join(mcf7_genesa, by = "ensembl_gene_id") %>%
+  mutate(case = case_when(
+    is.na(padj) ~ 0,
+    padj > 0.05 ~ 1,
+    padj <= 0.05 ~ 2
+  ))
+
+hicTRB_annb <- hicTRB_ann %>%
+  dplyr::rename(ensembl_gene_id = feature) %>%
+  full_join(mcf7_genesa, by = "ensembl_gene_id") %>%
+  mutate(case = case_when(
+    is.na(padj) ~ 0,
+    padj > 0.05 ~ 1,
+    padj <= 0.05 ~ 2
+  ))
+
+hicTRAc_annb <- hicTRAc_ann %>%
+  dplyr::rename(ensembl_gene_id = feature) %>%
+  full_join(mcf7_genesa, by = "ensembl_gene_id") %>%
+  mutate(case = case_when(
+    is.na(padj) ~ 0,
+    padj > 0.05 ~ 1,
+    padj <= 0.05 ~ 2
+  ))
+
+hicTRBc_annb <- hicTRBc_ann %>%
+  dplyr::rename(ensembl_gene_id = feature) %>%
+  full_join(mcf7_genesa, by = "ensembl_gene_id") %>%
+  mutate(case = case_when(
+    is.na(padj) ~ 0,
+    padj > 0.05 ~ 1,
+    padj <= 0.05 ~ 2
+  ))
+
+# annotating the new column back to the peakID
+df_fina <- df_splitan %>%
+  dplyr::rename(peak = name) %>%
+  full_join(hicTRA_annb, by = "peak") %>%
+  select(case, ensembl_gene_id, KRegA)
+
+df_finb <- df_splitbn %>%
+  dplyr::rename(peak = name) %>%
+  full_join(hicTRB_annb, by = "peak") %>%
+  select(case, ensembl_gene_id, KRegB)
+
+dfc_fina <- dfc_splitan %>%
+  dplyr::rename(peak = name) %>%
+  full_join(hicTRAc_annb, by = "peak") %>%
+  select(case, ensembl_gene_id, KRegA)
+
+dfc_finb <- dfc_splitbn %>%
+  dplyr::rename(peak = name) %>%
+  full_join(hicTRBc_annb, by = "peak") %>%
+  select(case, ensembl_gene_id, KRegB)
+
+# writing csv files so it can go back into the knowledge graph
+write_csv(df_fina, paste0("/Users/katietaylor/Library/Application Support/Neo4j Desktop/Application/relate-data/dbmss/dbms-2356fdc8-0767-4eee-88a9-1f29bc05e574/import/neo4j_casefilesa", ver, ".csv"))
+write_csv(df_finb, paste0("/Users/katietaylor/Library/Application Support/Neo4j Desktop/Application/relate-data/dbmss/dbms-2356fdc8-0767-4eee-88a9-1f29bc05e574/import/neo4j_casefilesb", ver, ".csv"))
+write_csv(dfc_fina, paste0("/Users/katietaylor/Library/Application Support/Neo4j Desktop/Application/relate-data/dbmss/dbms-2356fdc8-0767-4eee-88a9-1f29bc05e574/import/neo4j_casefilesac", ver, ".csv"))
+write_csv(dfc_finb, paste0("/Users/katietaylor/Library/Application Support/Neo4j Desktop/Application/relate-data/dbmss/dbms-2356fdc8-0767-4eee-88a9-1f29bc05e574/import/neo4j_casefilesbc", ver, ".csv"))
+}
+```
+
+Now we do the same thing for ABC
+
+```{r}
+df <- read_csv(paste0("/Users/katietaylor/Library/Application Support/Neo4j Desktop/Application/relate-data/dbmss/dbms-2356fdc8-0767-4eee-88a9-1f29bc05e574/import/neo4j_ABC.csv"))
+
+  df <- df %>%
+    filter(!is.na(chromosomeA))
+  
+  
+  df_splitan <- df %>%
+    dplyr::mutate(name = paste0("newInt", 1:nrow(df)))
+  df_splita <- df_splitan %>%
+    dplyr::select(chromosomeA, startA, endA, name) 
+  
+  
+  df_splitbn <- df %>%
+    dplyr::mutate(name = paste0("newInt", 1:nrow(df)))
+  df_splitb <- df_splitbn %>%
+    dplyr::select(chromosomeB, startB, endB, name) 
+  
+  
+  
+  df_splita_bed <- data.frame(chromosome = 
+                                df_splita$chromosomeA, start = 
+                                df_splita$startA - 1, end = 
+                                df_splita$endA, name = 
+                                df_splita$name, score = 0, strand = '.')
+  
+  
+  df_splitb_bed <- data.frame(chromosome = 
+                                df_splitb$chromosomeB, start = 
+                                df_splitb$startB - 1, end = 
+                                df_splitb$endB, name = 
+                                df_splitb$name, score = 0, strand = '.')
+
+  
+  
+  ## adding in bed file for all genes, not just DE
+  
+  ensembl <- useEnsembl(biomart = "genes", dataset = "hsapiens_gene_ensembl")
+  
+  mcf7_genesa <- read_csv("/Users/katietaylor/70006/RNA_DE_mcf7/mcf7_RNA_results_all_hgnc.csv")
+  
+  
+  mcf7_genes <- mcf7_genesa %>%
+    dplyr::select(ensembl_gene_id)
+  
+  
+  ensembl_ids <- mcf7_genes$ensembl_gene_id
+  
+  genes <- getBM(
+    attributes = c('ensembl_gene_id', 'chromosome_name', "transcription_start_site", 'strand'),
+    filters = 'ensembl_gene_id',
+    values = ensembl_ids,
+    mart = ensembl
+  )
+  
+  bed_data <- data.frame(chromosome = genes$chromosome_name, start = genes$transcription_start_site - 500, end = genes$transcription_start_site + 500, name = genes$ensembl_gene_id, score = 0, strand = ifelse(genes$strand == 1, "+", "-"))
+  
+  bed_data_unique <- bed_data %>%
+    distinct(name, .keep_all = TRUE)
+  
+  hicTRA <- toGRanges(df_splita_bed, format = 'BED')
+  hicTRB <- toGRanges(df_splitb_bed, format = 'BED')
+
+  
+  
+  mcf7_de_gr <- toGRanges(bed_data_unique, format = 'BED')
+  
+  hicTRA_anno <- annotatePeakInBatch(myPeakList = hicTRA, AnnotationData = mcf7_de_gr, output = 'overlapping', multiple = TRUE)
+  hicTRB_anno <- annotatePeakInBatch(myPeakList = hicTRB, AnnotationData = mcf7_de_gr, output = 'overlapping', multiple = TRUE)
+  
+  hicTRAc_anno <- annotatePeakInBatch(myPeakList = hicTRAc, AnnotationData = mcf7_de_gr, output = 'overlapping', multiple = TRUE)
+  hicTRBc_anno <- annotatePeakInBatch(myPeakList = hicTRBc, AnnotationData = mcf7_de_gr, output = 'overlapping', multiple = TRUE)
+  
+  hicTRA_ann <- as.data.frame(hicTRA_anno)
+  hicTRB_ann <- as.data.frame(hicTRB_anno)
+  
+  hicTRA_annb <- hicTRA_ann %>%
+    dplyr::rename(ensembl_gene_id = feature) %>%
+    full_join(mcf7_genesa, by = "ensembl_gene_id") %>%
+    mutate(case = case_when(
+      is.na(padj) ~ 0,
+      padj > 0.05 ~ 1,
+      padj <= 0.05 ~ 2
+    ))
+  
+  hicTRB_annb <- hicTRB_ann %>%
+    dplyr::rename(ensembl_gene_id = feature) %>%
+    full_join(mcf7_genesa, by = "ensembl_gene_id") %>%
+    mutate(case = case_when(
+      is.na(padj) ~ 0,
+      padj > 0.05 ~ 1,
+      padj <= 0.05 ~ 2
+    ))
+  
+  
+  df_fina <- df_splitan %>%
+    dplyr::rename(peak = name) %>%
+    full_join(hicTRA_annb, by = "peak") %>%
+    select(case, ensembl_gene_id, KRegA)
+  
+  df_finb <- df_splitbn %>%
+    dplyr::rename(peak = name) %>%
+    full_join(hicTRB_annb, by = "peak") %>%
+    select(case, ensembl_gene_id, KRegB)
+  
+
+  write_csv(df_fina, paste0("/Users/katietaylor/Library/Application Support/Neo4j Desktop/Application/relate-data/dbmss/dbms-2356fdc8-0767-4eee-88a9-1f29bc05e574/import/neo4j_casefilesa_ABC.csv"))
+  write_csv(df_finb, paste0("/Users/katietaylor/Library/Application Support/Neo4j Desktop/Application/relate-data/dbmss/dbms-2356fdc8-0767-4eee-88a9-1f29bc05e574/import/neo4j_casefilesb_ABC.csv"))
+```
+
+## Table 10: Finding if certain classes of genes are over represented in iDEGs
+
+This is one example of how I found if certain classes of genes were over represented in my iDEGs.
+
+```{r}
+iDEGs <- read_csv("/Users/katietaylor/70006/Integrated_lists_mcf7/Dif_genes_finalintdistinct_H3K27Ac_or_ATAC_and_H3K4Me1.csv")
+
+iDEGs_TF <- iDEGs %>%
+  dplyr::filter(g.TF == "YES")
+
+iDEGs_enz <- iDEGs %>%
+  dplyr::filter(g.enz == "YES")
+
+iDEGs_TSG <- iDEGs %>%
+  dplyr::filter(g.TSG == "YES")
+
+iDEGs_fusion <- iDEGs %>%
+  dplyr::filter(g.fusion == "YES")
+
+iDEGs_onco <- iDEGs %>%
+  dplyr::filter(g.onco == "YES")
+
+iDEGs_mito <- iDEGs %>%
+  dplyr::filter(g.mito == "YES")
+
+
+k <- nrow(iDEGs_mito)         # Number of successes (overlap)
+n <- nrow(mitogenes)         # Total number of each class of gene 
+K <- 853          # Total number in iDEGs
+N <- 22000         # Total population (sum of both groups minus overlap)
+
+print(k)
+  
+contingency_table <- matrix(c(k, n - k, K - k, N - K - (n - k)), 
+                              nrow = 2, 
+                              byrow = TRUE, 
+                              dimnames = list("Group A" = c("Present", "Absent"),
+                                              "Group B" = c("Present", "Absent")))
+
+# Fisher's Exact Test
+fisher_test <- fisher.test(contingency_table)
+print(fisher_test)
+```
+
+### Appendices Table 2: Significant overlap between annotated genes to each type of histone modification & accessibility
+
+I did this for treated and significant
+
+```{r}
+
+H3K4Me1 <- 6437+4091+1241+6061+14335+369+2791+257
+H3K4Me3 <- 483+1360+113+1281+14335+369+2791+257
+ATAC <- 4843+6437+176+6061+1281+14335+2791+1360
+H3K27Ac <- 207+176+113+1281+14335+6061+1241+369
+
+k <- 14335+1281+113+369         # Number of successes (overlap)
+n <- H3K27Ac         # Total number in Group A
+K <- H3K4Me3         # Total number in Group B
+N <- 63000         # Total population (sum of both groups minus overlap)
+print(k)
+print(n)
+print(K)
+
+# Calculate the p-value using the hypergeometric test
+p_value <- phyper(k - 1, K, N - K, n, lower.tail = FALSE)
+
+# Print the p-value
+print(p_value)
+
+contingency_table <- matrix(c(k, n - k, K - k, N - K - (n - k)), 
+                            nrow = 2, 
+                            byrow = TRUE, 
+                            dimnames = list("Group A" = c("Present", "Absent"),
+                                            "Group B" = c("Present", "Absent"))
+
+# Perform Fisher's Exact Test
+fisher_test <- fisher.test(contingency_table)
+
+# Print the result
+print(fisher_test)
+```
+
+## Quarto
+
+Quarto enables you to weave together content and executable code into a finished document. To learn more about Quarto see <https://quarto.org>.
+
+## Running Code
+
+When you click the **Render** button a document will be generated that includes both content and the output of embedded code. You can embed code like this:
+
+```{r}
+1 + 1
+```
+
+You can add options to executable code like this
+
+```{r}
+#| echo: false
+2 * 2
+```
+
+The `echo: false` option disables the printing of code (only output is displayed).

@@ -1,0 +1,872 @@
+---
+title: "Figure Generation Katie Taylor MSc"
+format: html
+editor: visual
+---
+
+# Main Figures
+
+```{r}
+library(dplyr)
+library(tidyverse)
+library(ggplot2)
+library(tidyr)
+```
+
+## Figure 10
+
+### 10A: Proliferation Assay
+
+The proliferation experiment was conducted by past members of the Shamarajiwa lab and came to me in the form a spreadsheet. The only work that I did with this experiment was plotting in my own color scheme.
+
+```{r}
+data <- read_csv("/Users/katietaylor/70006/MCF7_proliferation_data.csv")
+
+data2 <- data %>%
+  mutate(Untreated = rowMeans(select(., `Untreated 1`:`Untreated 4`)),
+         Untreated_SD = apply(select(., `Untreated 1`:`Untreated 4`), 1, sd)) %>%
+  mutate(Treatment_25 = rowMeans(select(., `25ng/ul TR1`:`25ng/ul TR2`)),
+         Treatment_25_SD = apply(select(., `25ng/ul TR1`:`25ng/ul TR1`), 1, sd)) %>%
+  mutate(Treatment_100 = rowMeans(select(., `100ng/ul TR1`:`100ng/ul TR2`)),
+         Treatment_100_SD = apply(select(., `100ng/ul TR1`:`100ng/ul TR1`), 1, sd)) %>%
+  dplyr::rename(Time = `Time (Hours)`)%>%
+  dplyr::select(Time, Untreated, Untreated_SD, Treatment_25, Treatment_25_SD, Treatment_100, Treatment_100_SD)
+
+long_data <- gather(data2, key = "Treatment", value = "Cell_Numbers", -Time, -ends_with("_SD"))
+long_data$SD <- c(data2$Untreated_SD, data2$Treatment_25_SD, data2$Treatment_100_SD)
+
+# Plot the data with error bars
+ggplot(long_data, aes(x = Time, y = Cell_Numbers, color = Treatment)) +
+  geom_line(size = 1.2) +  # Add lines for each treatment
+  geom_point(size = 3) +   # Add points for each time point
+  geom_errorbar(aes(ymin = Cell_Numbers - SD, ymax = Cell_Numbers + SD), width = 5) +  # Add error bars
+  labs(x = "Time (Hours)", y = "Cell Numbers (x10^6)") +
+  theme_minimal() +
+  scale_color_manual(values = c("Untreated" = "#F6A895", "Treatment_25" = "#7E8737", "Treatment_100" = "#0F3B5F")) +
+  theme(
+    legend.title = element_blank(),  # Remove legend title
+    panel.grid.major = element_blank(),  # Remove major grid lines
+    panel.grid.minor = element_blank()   # Remove minor grid lines
+  )
+```
+
+### 10B: Microarray Assay GSEA
+
+The microarray was preprocessed to the point of differential expression analysis by past members of the Samarajiwa lab. The only work that I did with this experiment was running GSEA and visualizing the results with heatmaps.
+
+```{r}
+# read in the limma results
+t2 <- read.table("/Users/katietaylor/70006/DEG_Lists 2/0.01fdr-0fc-global/limma_B2-B0.txt", header = TRUE, sep = "\t")
+
+t4 <- read.table("/Users/katietaylor/70006/DEG_Lists 2/0.01fdr-0fc-global/limma_B4-B0.txt", header = TRUE, sep = "\t")
+
+t6 <- read.table("/Users/katietaylor/70006/DEG_Lists 2/0.01fdr-0fc-global/limma_B6-B0.txt", header = TRUE, sep = "\t")
+
+t8 <- read.table("/Users/katietaylor/70006/DE_Analysis/DE_Analysis/DEG_Lists/0.01fdr-0fc-global/limma_B8-B0.txt", header = TRUE, sep = "\t")
+
+t10 <- read.table("/Users/katietaylor/70006/DE_Analysis/DE_Analysis/DEG_Lists/0.01fdr-0fc-global/limma_B10-B0.txt", header = TRUE, sep = "\t")
+
+#dplyr functionality to create .rnk files for gsea
+t2_rnk <- t2 %>%
+  dplyr::mutate("#ignored" = SYMBOL) %>%
+  dplyr::select("#ignored", logFC) %>%
+  dplyr::filter(!is.na(`#ignored`))
+
+colnames(t2_rnk) <- c("#ignored")
+
+
+t4_rnk <- t4 %>%
+  dplyr::mutate("#ignored" = SYMBOL) %>%
+  dplyr::select("#ignored", logFC) %>%
+  dplyr::filter(!is.na(`#ignored`))
+
+colnames(t4_rnk) <- c("#ignored")
+
+
+t6_rnk <- t6 %>%
+  dplyr::mutate("#ignored" = SYMBOL) %>%
+  dplyr::select("#ignored", logFC) %>%
+  dplyr::filter(!is.na(`#ignored`))
+
+colnames(t6_rnk) <- c("#ignored")
+
+t8_rnk <- t8 %>%
+  dplyr::mutate("#ignored" = SYMBOL) %>%
+  dplyr::select("#ignored", logFC) %>%
+  dplyr::filter(!is.na(`#ignored`))
+
+colnames(t8_rnk) <- c("#ignored")
+
+t10_rnk <- t10 %>%
+  dplyr::mutate("#ignored" = SYMBOL) %>%
+  dplyr::select("#ignored", logFC) %>%
+  dplyr::filter(!is.na(`#ignored`))
+
+colnames(t10_rnk) <- c("#ignored")
+
+
+# writing the .rnk files
+write.table(t2_rnk, file = "~/70006/MCF7_microarray_t2.rnk", sep = "\t", row.names = FALSE, col.names = TRUE)
+write.table(t4_rnk, file = "~/70006/MCF7_microarray_t4.rnk", sep = "\t", row.names = FALSE, col.names = TRUE)
+write.table(t6_rnk, file = "~/70006/MCF7_microarray_t6.rnk", sep = "\t", row.names = FALSE, col.names = TRUE)
+write.table(t8_rnk, file = "~/70006/MCF7_microarray_t8.rnk", sep = "\t", row.names = FALSE, col.names = TRUE)
+write.table(t10_rnk, file = "~/70006/MCF7_microarray_t10.rnk", sep = "\t", row.names = FALSE, col.names = TRUE)
+```
+
+I then ran the the .rnk files through GSEA in the desktop application against the MSigDB Hallmark gene sets, which generated the following .txt files
+
+```{r}
+# reading the files in
+t2_gsea <- read.table("/Users/katietaylor/gsea_home/output/aug16/my_analysis.GseaPreranked.1723816851431/gsea_report_for_na_pos_1723816851431.tsv", header = TRUE, sep = "\t")
+t4_gsea <- read.table("/Users/katietaylor/70006/gsea_report_for_na_pos_1723816871843.tsv", header = TRUE, sep = "\t")
+t6_gsea <- read.table("/Users/katietaylor/gsea_home/output/aug16/my_analysis.GseaPreranked.1723816900109/gsea_report_for_na_pos_1723816900109.tsv", header = TRUE, sep = "\t")
+t8_gsea <- read.table("/Users/katietaylor/gsea_home/output/aug22/my_analysis.GseaPreranked.1724330378382/gsea_report_for_na_pos_1724330378382.tsv", header = TRUE, sep = "\t")
+t10_gsea <- read.table("/Users/katietaylor/gsea_home/output/aug22/my_analysis.GseaPreranked.1724330387721/gsea_report_for_na_pos_1724330387721.tsv", header = TRUE, sep = "\t")
+
+# dplyr functionality to create differently named columns for normalized enrichment score at each time point
+t2_gsea <- t2_gsea %>%
+  dplyr::rename(NES_2_hours = NES) %>%
+  dplyr::select(NAME, NES_2_hours)
+t4_gsea <- t4_gsea %>%
+  dplyr::rename(NES_4_hours = NES)%>%
+  dplyr::select(NAME, NES_4_hours)
+t6_gsea <- t6_gsea %>%
+  dplyr::rename(NES_6_hours = NES)%>%
+  dplyr::select(NAME, NES_6_hours)
+t8_gsea <- t8_gsea %>%
+  dplyr::rename(NES_8_hours = NES)%>%
+  dplyr::select(NAME, NES_8_hours)
+t10_gsea <- t10_gsea %>%
+  dplyr::rename(NES_10_hours = NES)%>%
+  dplyr::select(NAME, NES_10_hours)
+
+# joining the dataframes with the newly named columns
+all_t_gsea <- t2_gsea %>%
+  full_join(t4_gsea, by = "NAME")%>%
+  full_join(t6_gsea, by = "NAME")%>%
+  full_join(t8_gsea, by = "NAME")%>%
+  full_join(t10_gsea, by = "NAME")
+
+# creating a matrix for heatmap visusalization
+rownames(all_t_gsea) <- all_t_gsea$NAME
+all_t_gsea <- all_t_gsea %>%
+  dplyr::select(!NAME)
+all_t_gsea[is.na(all_t_gsea)] <- 0
+
+#loading libraries
+library(pheatmap)
+library(scico)
+
+# Generate a color palette from scico
+scico_palette <- scico(100, palette = "batlowK", begin = 0.95, end = 0.15) 
+
+# plotting the heatmap
+pheatmap(all_t_gsea, 
+         cluster_rows = FALSE, 
+         cluster_cols = FALSE, 
+         display_numbers = FALSE, 
+         main = "NES Heatmap", 
+         color = scico_palette, 
+         border_color = NA)
+```
+
+## Figure 11
+
+### A & B: PCA Plots
+
+```{r}
+
+# we first read in the sample information (treated versus untreated)
+mcf7_sample_info_Rsubread <- read_delim("/Users/katietaylor/70006/RNA_DE_mcf7/coldata_Rsubread_mcf7.txt") %>%
+  as.data.frame()
+
+sdev <- sample_pca_Rsubread$sdev
+
+# Calculated variance explained by each PC
+variance_explained <- (sdev^2) / sum(sdev^2) * 100
+
+# Created a data frame for easier handling
+variance_df <- tibble(
+  PC = paste0("PC", seq_along(variance_explained)),
+  VarianceExplained = variance_explained
+)
+
+
+pca_plot_Rsubread <- sample_pca_Rsubread$x %>% 
+  as_tibble(rownames = "ID") %>% 
+  full_join(mcf7_sample_info_Rsubread, by = "ID") %>% 
+  ggplot(aes(x = PC1, y = PC2, color = condition)) +
+  geom_point(size = 7) +
+  ggtitle("Rsubread PCA") +
+  theme(
+    panel.background = element_blank(),
+    # plot.background = element_blank(),  # Uncomment if needed
+    legend.background = element_blank(),
+    legend.box.background = element_blank(),
+    legend.text = element_text(family = "Arial", size = 20, color = "black"),
+    axis.text = element_blank(),         # Remove axis text
+    axis.ticks = element_blank(),        # Remove axis ticks
+    panel.border = element_rect(color = "black", fill = NA, size = 1),  # Add border
+    axis.title.x = element_text(family = "Arial", size = 20, color = "black"),  # Style x-axis title
+    axis.title.y = element_text(family = "Arial", size = 20,  color = "black"), # Style y-axis title
+    plot.title = element_text(family = "Arial", size = 20, color = "black")
+  ) +
+  scale_color_manual(values = c("treated" = "#124E63", "untreated" = "#F6A895"))
+
+# Added titles to axes with `labs()`
+pca_plot_Rsubread <- pca_plot_Rsubread +
+  labs(
+    x = "Principal Component 1 (81.3%)",  # Set x-axis title
+    y = "Principal Component 2 (12.8%)"   # Set y-axis title
+  )
+
+# print the plot
+pca_plot_Rsubread
+
+# for pc 2 and 3
+pca_plot_Rsubread2 <- sample_pca_Rsubread$x %>% 
+  as_tibble(rownames = "ID") %>% 
+  full_join(mcf7_sample_info_Rsubread, by = "ID") %>% 
+  ggplot(aes(x = PC3, y = PC4, color = condition)) +
+  geom_point(size = 7) +
+  ggtitle("Rsubread PCA") +
+  theme(
+    panel.background = element_blank(),
+    # plot.background = element_blank(),  # Uncomment if needed
+    legend.background = element_blank(),
+    legend.box.background = element_blank(),
+    legend.text = element_text(family = "Arial", size = 20, color = "black"),
+    axis.text = element_blank(),         # Remove axis text
+    axis.ticks = element_blank(),        # Remove axis ticks
+    panel.border = element_rect(color = "black", fill = NA, size = 1),  # Add border
+    axis.title.x = element_text(family = "Arial", size = 20, color = "black"),  # Style x-axis title
+    axis.title.y = element_text(family = "Arial", size = 20,  color = "black"),   # Style y-axis title
+    plot.title = element_text(family = "Arial", size = 20, color = "black")
+  ) +
+  scale_color_manual(values = c("treated" = "#124E63", "untreated" = "#F6A895"))
+
+# Added titles to axes with `labs()`
+pca_plot_Rsubread2 <- pca_plot_Rsubread2 +
+  labs(
+    x = "Principal Component 3 (3.5%)",  # Set x-axis title
+    y = "Principal Component 4 (1.2%)"   # Set y-axis title
+  )
+
+# print the plot
+pca_plot_Rsubread2
+
+```
+
+### C: Volcano Plot
+
+```{r}
+plot(shrinkLvV$log2FoldChange, shrinkLvV$log10_padj, 
+     xlab = "log2 Fold Change (logFC)", 
+     ylab = "-log10(pvalue)",
+     main = "MCF7 RNA-Seq Volcano Plot",
+     pch = 20,  # Use solid points
+     col = ifelse(res$padj < 0.05, "#175362", "#FAC3BA"))+
+  abline(h = -log10(0.05), col = "#FAC3BA", lty = 2) 
+```
+
+### D: Heatmap
+
+```{r}
+myPalette <- c("#124E63", "#FFFEFE", "#F6A895")
+myRamp = colorRamp2(c(-2, 0, 2), myPalette)
+# pulling of DEGs
+sigGenes <- as.data.frame(shrinkLvV) %>% 
+  top_n(1092, wt=abs(log2FoldChange)) %>% 
+  pull("GeneID")
+plotDat <- vst(dds)[sigGenes,] %>% 
+  assay()
+z.mat <- t(scale(t(plotDat), center=TRUE, scale=TRUE))
+Heatmap(z.mat, name = "z-score",
+        col = myRamp,
+        show_column_names = FALSE,
+        show_row_names = FALSE,
+        cluster_columns = FALSE,
+        cluster_rows = TRUE,
+        heatmap_height = unit(6, "npc"))
+
+par(family = "Arial")
+```
+
+### E: Venn diagram: ISGs versus MCF7
+
+```{r}
+mcf7 <- read_csv("/Users/katietaylor/Downloads/mcf7_results_sig_hgnc.csv")
+
+isgverse <- read_csv("/Users/katietaylor/70006/ISGs_with_score.csv")
+
+mcf7_l <- unique(mcf7$ensembl_gene_id)  # Ensure unique values
+isg_l <- unique(isgverse$geneid)        # Ensure unique values
+
+# Create a named list of sets
+venn_l <- list(
+  mcf7_genes = mcf7_l,
+  isg_genes = isg_l
+)
+
+venn_plot <- ggvenn(data = venn_l, 
+                    show_percentage = FALSE, 
+                    fill_color = c("#124E63", "#F6A895"), 
+                    set_name_color = "black", 
+                    stroke_size = 0.05, 
+                    stroke_color = "white", 
+                    text_size = 6)
+venn_plot + theme(
+  text = element_text(family = "Arial"),  # Set font family to Arial
+  plot.title = element_text(family = "Arial"),
+  legend.text = element_text(family = "Arial")
+)
+```
+
+## Figure 12
+
+### A: Correlation heat maps
+
+```{r}
+dba.plotHeatmap(chip_mcf7_H3K27Ac_dba, correlation=TRUE, scale="row", colScheme = batlow_palette, colSideCols = c("#124E63", "#E0A874"))
+dba.plotHeatmap(chip_mcf7_H3K4Me3_dba, correlation=TRUE, scale="row", colScheme = batlow_palette, colSideCols = c("#124E63", "#E0A874"))
+dba.plotHeatmap(chip_mcf7_H3K4Me1_dba, correlation=TRUE, scale="row", colScheme = batlow_palette, colSideCols = c("#124E63", "#E0A874"))
+dba.plotHeatmap(atac_mcf7_dba1, correlation=TRUE, scale="row", colScheme = batlow_palette, colSideCols = c("#124E63", "#E0A874"))
+```
+
+### B: Profile plots
+
+```{r}
+par(mfrow = c(1, 4))
+dba.plotProfile(profiles27Ac, matrices_color = c("#124E63", "#FFF0F0", "#F6A895"), 
+                group_anno_color = c("#124E63", "#F6A895"))
+dba.plotProfile(profiles4Me3, matrices_color = c("#124E63", "#FFF0F0", "#F6A895"), 
+                group_anno_color = c("#124E63", "#F6A895"))
+dba.plotProfile(profieles4Me1, matrices_color = c("#124E63", "#FFF0F0", "#F6A895"), 
+                group_anno_color = c("#124E63"))
+dba.plotProfile(profilesAtac, matrices_color = c("#124E63", "#FFF0F0", "#F6A895"), 
+                group_anno_color = c("#124E63", "#F6A895"))
+par(mfrow = c(1, 1))
+```
+
+### C: Created in Biorender.com
+
+### D: Genomic element distribution
+
+```{r}
+chip_seq_anno_list <- list(chip_mcf7_H3K4Me1_dba.DB, chip_mcf7_H3K4Me3_dba.DB, chip_mcf7_H3K27Ac_dba.DB)
+annotated_list <- lapply(chip_seq_anno_list, function(anno) {
+  annotatePeakInBatch(anno, AnnotationData = annoData)
+})
+names(annotated_list[[1]]) <- make.names(seqnames(annotated_list[[1]]), unique = TRUE)
+names(annotated_list[[2]]) <- make.names(seqnames(annotated_list[[2]]), unique = TRUE)
+names(annotated_list[[3]]) <- make.names(seqnames(annotated_list[[3]]), unique = TRUE)
+
+gr_peaks <- GRangesList(H3K4Me1 = chip_seq_anno_list[[1]],
+                          H3K4Me3 = chip_seq_anno_list[[2]],
+                          H3K27Ac = chip_seq_anno_list[[3]])
+genomicElementDistribution(gr_peaks, 
+                           TxDb = TxDb.Hsapiens.UCSC.hg38.knownGene,
+                           labelColors = c(promoter = "#1F618D", geneDownstream = "#B03A2E", geneBody = "#FADBD8",
+    distalIntergenic = "#EBF5FB", exon = "#F2D7D5", intron = "#C0392B", intergenic =
+    "#D98880", utr5 = "#85929E", utr3 = "#34495E", CDS = "#D6DBDF", otherExon =
+    "#1B2631"))
+```
+
+### E: Venn Diagrams
+
+### Treated
+
+We had to do the annotation to the nearest TSS for peaks shared between treated samples
+
+```{r}
+library(dplyr)
+library(readr)
+library(ggvenn)
+H3K27Ac_tr <- read.table("/Users/katietaylor/70006/MCF7_R_input/11_Treated5_H3K27Ac_peaks.bed_tr.bed")
+H3K27Ac_tr <- H3K27Ac_tr %>%
+  dplyr::rename(chromosome = V1, start = V2, end = V3) %>%
+  mutate(name = paste0("KTAc", 1:nrow(H3K27Ac_tr))) %>%
+  dplyr::select(chromosome, start, end, name)
+
+H3K27Ac_tr_gr <- toGRanges(H3K27Ac_tr, format = 'BED')
+
+H3K4Me3_tr <- read.table("/Users/katietaylor/70006/MCF7_R_input/03_Treated1_H3K4Me3_peaks.bed_tr.bed")
+
+H3K4Me3_tr <- H3K4Me3_tr %>%
+  dplyr::rename(chromosome = V1, start = V2, end = V3) %>%
+  mutate(name = paste0("KTMe3", 1:nrow(H3K4Me3_tr))) %>%
+  dplyr::select(chromosome, start, end, name)
+
+H3K4Me3_tr_gr <- toGRanges(H3K4Me3_tr, format = 'BED')
+
+ATAC_tr <- read.table("/Users/katietaylor/70006/MCF7_R_input/sorted_1_0A5L_01JKMRC_BrCa-TREATED-1_ATAC_hs_i201_r1.fastq.sam_noM.bam_ASF.bam_MACS_ATACSeq_NFR_Peaks_peaks.bed_tr.bed")
+
+ATAC_tr <- ATAC_tr %>%
+  dplyr::rename(chromosome = V1, start = V2, end = V3) %>%
+  mutate(name = paste0("KTATAC", 1:nrow(ATAC_tr))) %>%
+  dplyr::select(chromosome, start, end, name)
+
+ATAC_tr_gr <- toGRanges(ATAC_tr, format = 'BED')
+
+
+H3K4Me1_tr <- read.table("/Users/katietaylor/70006/MCF7_R_input/07_Treated3_H3K4Me1_peaks.bed_tr.bed")
+H3K4Me1_tr <- H3K4Me1_tr %>% 
+  dplyr::rename(chromosome = V1, start = V2, end = V3) %>% 
+  mutate(name = paste0("KTMe1", 1:nrow(H3K4Me1_tr))) %>% 
+  dplyr::select(chromosome, start, end, name)
+
+H3K4Me1_tr_gr <- toGRanges(H3K4Me1_tr, format = 'BED')
+
+library("ChIPpeakAnno")
+library("GenomicRanges")
+library("rtracklayer")
+library("org.Hs.eg.db")
+library("EnsDb.Hsapiens.v86")
+
+annoData <- toGRanges(EnsDb.Hsapiens.v86, feature="gene")
+
+atac_seq_anno_list <- list(H3K4Me1 = H3K4Me1_tr_gr, ATAC = ATAC_tr_gr, H3K27Ac = H3K27Ac_tr_gr, H3K4Me3 = H3K4Me3_tr_gr)
+annotated_list <- lapply(atac_seq_anno_list, function(anno) {
+  annotatePeakInBatch(anno, AnnotationData = annoData)
+})
+names(annotated_list[[1]]) <- make.names(seqnames(annotated_list[[1]]), unique = TRUE)
+names(annotated_list[[2]]) <- make.names(seqnames(annotated_list[[2]]), unique = TRUE)
+names(annotated_list[[3]]) <- make.names(seqnames(annotated_list[[3]]), unique = TRUE)
+names(annotated_list[[4]]) <- make.names(seqnames(annotated_list[[4]]), unique = TRUE)
+
+anno_df_H3K4Me1 <- as.data.frame(annotated_list[[1]])
+anno_df_ATAC <- as.data.frame(annotated_list[[2]])
+anno_df_H3K27Ac <- as.data.frame(annotated_list[[3]])
+anno_df_H3K4Me3 <- as.data.frame(annotated_list[[4]])
+
+venn_l <- list(H3K4Me1 = anno_df_H3K4Me1$feature,
+               ATAC = anno_df_ATAC$feature,
+               H3K27Ac = anno_df_H3K27Ac$feature, 
+               H3K4Me3 = anno_df_H3K4Me3$feature)
+
+ggvenn(venn_l)
+
+venn_plot <- ggvenn(data = venn_l, 
+                    show_percentage = FALSE, 
+                    fill_color = c("#124E63", "#F6A895", "#A29433", "#FFDFDD"), 
+                    set_name_color = "black", 
+                    stroke_size = 0.05, 
+                    stroke_color = "white", 
+                    text_size = 4)
+venn_plot + theme(
+  text = element_text(family = "Arial"),  # Set font family to Arial
+  plot.title = element_text(family = "Arial"),
+  legend.text = element_text(family = "Arial")
+)
+```
+
+### Differential
+
+```{r}
+library(dplyr)
+library(readr)
+library(ggvenn)
+
+# reading in each file
+ATAC <- read_csv(file = "/Users/katietaylor/70006/ATAC_mcf7/anno_df_macs2c.csv")
+H3K4Me1 <- read_csv(file = "/Users/katietaylor/70006/CHIP_mcf7/anno_df_H3K4Me1.csv")
+H3K4Me3 <- read_csv(file = "/Users/katietaylor/70006/CHIP_mcf7/anno_df_H3K4Me3.csv")
+H3K27Ac <- read_csv(file = "/Users/katietaylor/70006/CHIP_mcf7/anno_df_H3K27Ac.csv")
+
+# creating a list for ggvenn to handle
+venn_l <- list(H3K4Me1 = H3K4Me1$feature,
+               ATAC = ATAC$feature,
+               H3K27Ac = H3K27Ac$feature, 
+               H3K4Me3 = H3K4Me3$feature)
+# plotting the venn diagram
+venn_plot <- ggvenn(data = venn_l, 
+                    show_percentage = FALSE, 
+                    fill_color = c("#124E63", "#F6A895", "#A29433", "#FFDFDD"), 
+                    set_name_color = "black", 
+                    stroke_size = 0.05, 
+                    stroke_color = "white", 
+                    text_size = 5)
+venn_plot + theme(
+  text = element_text(family = "Arial"),  # Set font family to Arial
+  plot.title = element_text(family = "Arial"),
+  legend.text = element_text(family = "Arial")
+)
+```
+
+## Figure 13
+
+### A: Principle coordinate plot
+
+We now can create our own color scheme with this plot
+
+```{r}
+p <- scatterPlot(simMatrix, reducedTerms, algorithm = "pca", onlyParents = FALSE, labelSize = 4, addLabel = TRUE) 
+p <- p + scale_color_remove("color")
+
+p <- p + theme(legend.position = "none", panel.grid.major = element_blank(),  # Remove major grid lines
+               panel.grid.minor = element_blank()) +
+  scale_color_manual(values = c("#011959", "#205F61", "#497451", "#114360", "#637E44" , "#0D315D", "#326B5C", "#165162","#0F3B5F", "#1A5862", "#3D7056",
+                                  "#134A61", "#08255B", "#56794A", "#28655F", "#1D5C62", "#051F5A", "#124761", "#386D59", "#5C7B47", "#185562", "#246261",
+                                  "#4F774D", "#2D685E",
+                                  "#E9AC88", "#7E8737", "#E7AB84", "#FED1CD", "#BF9D46", "#9E9233", "#FFEAEA", "#F5B7A6", "#D7A564", "#FFF5F5", "#FFDFDD",
+                                  "#FAC3BA", "#70823D", "#EEB094", "#E0A874", "#8E8D33", "#AF9839", "#CBA154", "#EBAD8B", "#FFE5E4", "#B79B3F", "#A79535",
+                                  "#DBA76D", "#F8BDAF", "#FFF0F0"))
+
+```
+
+### B: Heatmap
+
+Reactome up and down were downloaded from the Ractome web application.
+
+```{r}
+
+# reading in the files
+reac_mcf7_up <- read_csv("/Users/katietaylor/70006/mcf7_up_reactome.csv")
+reac_mcf7_down <- read_csv("/Users/katietaylor/70006/mcf7_down_reactome.csv")
+
+# renameing to have separte columns when dataframes are joined
+reac_mcf7_up <- reac_mcf7_up %>%
+  dplyr::rename(upregulation_FDR = "Entities FDR") %>%
+  dplyr::select(`Pathway identifier`, `Pathway name`, upregulation_FDR)
+reac_mcf7_down <- reac_mcf7_down %>%
+  dplyr::rename(downregulation_FDR = "Entities FDR") %>%
+  dplyr::select(`Pathway identifier`, `Pathway name`, downregulation_FDR)
+
+# full join
+reac_mcf7 <- full_join(reac_mcf7_up, reac_mcf7_down, by = c("Pathway identifier", "Pathway name"))
+
+# filter for most significant pathways
+reac_mcf7 <- reac_mcf7 %>%
+  dplyr::filter(upregulation_FDR <= 0.05 | downregulation_FDR <= 0.05)
+
+# replace nas 
+data <- reac_mcf7 %>%
+  mutate(across(starts_with("upregulation_FDR"), ~ replace_na(., 1))) %>%
+  mutate(across(starts_with("downregulation_FDR"), ~ replace_na(., 1)))
+
+# Prepare the matrix for pheatmap
+heatmap_data <- data %>%
+  dplyr::select(`Pathway name`, upregulation_FDR, downregulation_FDR) %>%
+  column_to_rownames(var = "Pathway name") %>%
+  as.matrix()
+
+# color generation
+myPalette <- c("#124E63", "#FFFEFE", "#F6A895")
+# created the ramp function
+myRamp = colorRamp2(c(0, 1, 13), myPalette)
+data_range <- range(heatmap_data, na.rm = TRUE)
+color_breaks <- seq(data_range[1], data_range[2], length.out = 100)
+colors <- myRamp(color_breaks)
+values <- seq(0, 13, length.out = 100)
+# applied the ramp function to the values to get the corresponding colors
+colors <- myRamp(values)
+
+# transformed FDR to -log10(FDR) for better visualization
+heatmap_data <- -log10(heatmap_data)
+
+# heat map generation
+pheatmap(heatmap_data, 
+         cluster_rows = FALSE, 
+         cluster_cols = FALSE, 
+         display_numbers = FALSE, 
+         fontsize_number = 10,
+         col = colors,
+         main = "Pathway FDR Heatmap", 
+         border_color = NA, 
+         legend = TRUE,
+         fontsize = 8)
+```
+
+### C-E: Created with GSEA, MEME-ChIP, and BINDEtect
+
+## Figure 16
+
+### Above: Hi-C interaction triangle
+
+```{r}
+library(plotgardenerData)
+library(viridis)
+pdf("~/70006/FOXO3triangle.pdf", width = 10, height = 5)
+
+plotHicTriangle(
+  data = "/Users/katietaylor/70006/HIC/TR.allValidPairs.hic",
+  chrom = "6", chromstart = 107114500, chromend = 109130099,
+  assembly = "hg38", 
+  resolution = 5000,
+  palette = viridis_pal(option = "mako"), # Try 'plasma', 'magma', or 'cividis'
+  zrange = c(0, 10), 
+  matrix = "observed", 
+  colorTrans = "linear"
+)
+dev.off()
+```
+
+## Figure 17: Circos plots
+
+First we have to load the packages
+
+```{r}
+library(readr)
+library(dplyr)
+library(circlize)
+library(biomaRt)
+library(purrr)
+```
+
+We actually did a lot of these plots for different genes before deciding on FOXO3
+
+First we have to read everything in
+
+```{r}
+# reading in one of the preliminary iDEG lists (not the final one, but it's okay, because we took FOXO3 from this list, which is present in both).
+mcf7 <- read_csv("/Users/katietaylor/Downloads/intgene_ens.csv") %>%
+  dplyr::rename(ensembl_gene_id = g.Ensemblid)
+
+# using biomart to get the TSS, start, and end position of the gene. 
+ensembl <- useEnsembl(biomart = "genes", dataset = "hsapiens_gene_ensembl", mirror = "www")
+
+ncbi_ID <- getBM(attributes = c("transcription_start_site", "ensembl_gene_id", "hgnc_symbol", "chromosome_name", "start_position", "end_position"),
+                 filters = "ensembl_gene_id", 
+                 values = mcf7$ensembl_gene_id, 
+                 mart = ensembl)
+
+# "first" and "second" denote certain regions up and downstream of the TSS
+
+mcf7 <- full_join(mcf7, ncbi_ID, by = "ensembl_gene_id") %>%
+  mutate(first = transcription_start_site - 600000) %>%
+  mutate(second = transcription_start_site + 600000) 
+
+# since there are different transcripts, this created duplicate genes
+mcf7 <- mcf7 %>%
+  dplyr::distinct(hgnc_symbol, .keep_all = TRUE)
+
+mcf7_start_end <- mcf7 %>%
+  dplyr::select(chromosome_name, start_position, end_position, hgnc_symbol)
+
+
+# reading in significant intreactions at 20 kb. This time, significant was designated at q <= 0.25. Read in both treated and wild type
+fithic <- read.delim(file = "/Users/katietaylor/70006/HIC/20k/20000/FITHIC_TR/FitHiC.spline_pass2.res20000.significances.txt", header = TRUE, sep = "\t")
+#View(fithic)
+
+
+fithic_f <- fithic %>%
+  dplyr::filter(q.value <= 0.25) %>%
+  dplyr::mutate(start1 = fragmentMid1 - 10000) %>%
+  dplyr::mutate(stop1 = fragmentMid1 + 10000) %>%
+  dplyr::mutate(start2 = fragmentMid2 - 10000) %>%
+  dplyr::mutate(stop2 = fragmentMid2 + 10000) %>%
+  dplyr::select(chr1, start1, stop1, chr2, start2, stop2)
+
+fithicwt <- read.delim(file = "/Users/katietaylor/70006/HIC/20k/20000/FITHIC_WT/FitHiC.spline_pass2.res20000.significances.txt", header = TRUE, sep = "\t")
+
+
+fithic_wt <- fithicwt %>%
+  dplyr::filter(q.value <= 0.25) %>%
+  dplyr::mutate(start1 = fragmentMid1 - 10000) %>%
+  dplyr::mutate(stop1 = fragmentMid1 + 10000) %>%
+  dplyr::mutate(start2 = fragmentMid2 - 10000) %>%
+  dplyr::mutate(stop2 = fragmentMid2 + 10000) %>%
+  dplyr::select(chr1, start1, stop1, chr2, start2, stop2)
+
+# reading in BED files for the circular tracks around the interaction data. This was peaks shared between treated samples
+
+H3K27Ac_tr <- read.table("/Users/katietaylor/70006/MCF7_R_input/11_Treated5_H3K27Ac_peaks.bed_tr.bed")
+
+H3K4Me3_tr <- read.table("/Users/katietaylor/70006/MCF7_R_input/03_Treated1_H3K4Me3_peaks.bed_tr.bed")
+
+ATAC_tr <- read.table("/Users/katietaylor/70006/MCF7_R_input/sorted_1_0A5L_01JKMRC_BrCa-TREATED-1_ATAC_hs_i201_r1.fastq.sam_noM.bam_ASF.bam_MACS_ATACSeq_NFR_Peaks_peaks.bed_tr.bed")
+
+H3K4Me1_tr <- read.table("/Users/katietaylor/70006/MCF7_R_input/07_Treated3_H3K4Me1_peaks.bed_tr.bed")
+```
+
+Circos plot generation. Start and stop designate regions generated by the plot itself. Filter2a and filter2b designate regions that one of the anchors needed to be in for the second plot (on the right). The right hand plot is generated by uncommenting the line: `filter((start1 > filter2a & start1 < filter2b) | (start2 > filter2a & start2 < filter2b))`
+
+```{r}
+for (i in seq_len(nrow(mcf7))) {
+  # Extract values from the current row
+  chr <- paste0("chr", mcf7$chromosome_name[i])
+  start_filter <- mcf7$first[i]
+  stop_filter <- mcf7$second[i]
+  hgnc_symbol <- mcf7$hgnc_symbol[i]
+  start_pos <- mcf7$start_position[i]
+  end_pos <- mcf7$end_position[i]
+  filter2a <-mcf7$transcription_start_site[i] - 40000
+  filter2b <-mcf7$transcription_start_site[i] + 40000
+  
+  #histone filters
+  H3K27Ac_tr1 <- H3K27Ac_tr %>%
+    filter(V1 == chr) %>%
+    filter(V2 > start_filter) %>%
+    filter(V3 < stop_filter)
+  H3K4Me1_tr1 <- H3K4Me1_tr %>%
+    filter(V1 == chr) %>%
+    filter(V2 > start_filter) %>%
+    filter(V3 < stop_filter)
+  H3K4Me3_tr1 <- H3K4Me3_tr %>%
+    filter(V1 == chr) %>%
+    filter(V2 > start_filter) %>%
+    filter(V3 < stop_filter)
+  ATAC_tr1 <- ATAC_tr %>%
+    filter(V1 == chr) %>%
+    filter(V2 > start_filter) %>%
+    filter(V3 < stop_filter)
+  bed_list <- list(H3K27Ac_tr1, H3K4Me1_tr1, H3K4Me3_tr1, ATAC_tr1)
+  
+  
+  # Filter the data frames based on the current row's values
+  fithic_1 <- fithic_f %>%
+    filter(chr1 == chr) %>%
+    filter(start1 > start_filter) %>%
+    filter(stop2 < stop_filter) 
+    #filter((start1 > filter2a & start1 < filter2b) | (start2 > filter2a & start2 < filter2b))
+  
+  if (nrow(fithic_1) == 0) {
+    next
+  }
+  
+  fithic_1a <- fithic_1 %>%
+    dplyr::select(chr1, start1, stop1)
+  
+  fithic_1b <- fithic_1 %>%
+    dplyr::select(chr2, start2, stop2)
+  
+  fithic_1wt <- fithic_wt %>%
+    dplyr::filter(chr1 == chr) %>%
+    dplyr::filter(start1 > start_filter) %>%
+    dplyr::filter(stop2 < stop_filter) 
+    #dplyr::filter((start1 < filter2a & start1 > filter2b) | (start2 < filter2a & start2 > filter2b))
+  
+  if (nrow(fithic_1wt) == 0) {
+    next
+  }
+  
+  fithic_1awt <- fithic_1wt %>%
+    dplyr::select(chr1, start1, stop1)
+  
+  fithic_1bwt <- fithic_1wt %>%
+    dplyr::select(chr2, start2, stop2)
+  
+  output_filename <- sprintf("~/70006/circos_plots/%s_%d_%d_new7.pdf", hgnc_symbol, start_filter, stop_filter)
+  pdf(output_filename)
+  
+  print(output_filename)
+  
+  colors <- c("#7ebcd2", "#142C5F", "#F6A895", "#7E8737")
+  line_thickness <- 3
+  
+  # Initialize circos plot
+  circos.genomicInitialize(fithic_1[, c("chr1", "start1", "stop2")])
+  
+  circos.genomicTrack(bed_list, stack = TRUE, 
+                      panel.fun = function(region, value, ...) {
+                        i = getI(...)
+                        circos.genomicLines(region, value, col = colors[i], lwd = line_thickness, ...)
+                      })
+  
+  
+  # Add the genomic links
+  circos.genomicLink(
+    region1 = fithic_1awt[, c("chr1", "start1", "stop1")],
+    region2 = fithic_1bwt[, c("chr2", "start2", "stop2")],
+    col = adjustcolor("#142C5F", alpha.f = 0.3), 
+    border = NA
+  )
+  
+  circos.genomicLink(
+    region1 = fithic_1a[, c("chr1", "start1", "stop1")],
+    region2 = fithic_1b[, c("chr2", "start2", "stop2")],
+    col = adjustcolor("#F6A895", alpha.f = 0.3), 
+    border = NA
+  )
+  
+  #View(fithic_1a)
+  
+  label_data <- mcf7[i, c("chromosome_name", "transcription_start_site", "hgnc_symbol")] %>%
+    dplyr::mutate(chromosome_name = paste0("chr", chromosome_name))
+  
+  # Add labels to the circos plot
+  circos.genomicLabels(
+    bed = label_data[, c("chromosome_name", "transcription_start_site", "transcription_start_site")],
+    labels.column = 2, # The index of the column with labels
+    side = "outside",       # Position the labels outside the circos plot
+    col = "black",          # Label color
+    cex = 0.6,              # Label size
+    connection_height = 0.05, # Height of the connector line
+    line_col = "gray"       # Connector line color
+  )
+  
+  # Save the circos plot
+  # Clear the plot for the next iteration
+  
+  # Save and close the device
+  dev.off()
+}
+```
+
+# Appendices Figures
+
+### Appendices Figures 3 and 4
+
+The upset plots were created with the intervene package with the following code on the HPC:
+
+for the differentially modified/accessible regions:
+
+```{bash, eval = F}
+# Using GENWALK on MCF7 up regulated genes
+#PBS -l walltime=24:00:00
+#PBS -l select=1:ncpus=8:mem=48gb
+
+# Set working directory
+cd $PBS_0_WORKDIR
+
+# Load appropriate modules
+module load INTERVENE/0.6.5
+
+intervene upset -i /rds/general/user/kmt23/home/jobs/interveneInp/*.bed --names=H3K27Ac,H3K4Me1,H3K4Me3,ATAC -o ~/jobs/interveneInp/
+```
+
+For the treated regions:
+
+```{bash}
+#PBS -l walltime=24:00:00
+#PBS -l select=1:ncpus=8:mem=48gb
+
+# Set working directory
+cd $PBS_0_WORKDIR
+
+# Load appropriate modules
+module load INTERVENE/0.6.5
+
+intervene upset -i /rds/general/user/kmt23/ephemeral/data/MEME/Peaks_bed/*a.bed -o /rds/general/user/kmt23/ephemeral/data/interveneinput/interveneinput/may29genrichoutput
+```
+
+They were then able to be visualized with versions of the following code for each upset plot. This code output was generated directly from intervene.
+
+```{r}
+library("UpSetR")
+pdf("/Users/katietaylor/70006/interveneoutput/output_thor/Intervene_upsetcolor.pdf", width=14, height=8, onefile=FALSE)
+expressionInput <- c('Treated2'=1396334,'Treated1'=881297,'Treated1&Treated2'=489016,'Control2'=1513855,'Control2&Treated2'=714620,'Control2&Treated1'=504561,'Control2&Treated1&Treated2'=592302,'Control1'=2538004,'Control1&Treated2'=1218830,'Control1&Treated1'=796223,'Control1&Treated1&Treated2'=964387,'Control1&Control2'=1294511,'Control1&Control2&Treated2'=1497414,'Control1&Control2&Treated1'=936836,'Control1&Control2&Treated1&Treated2'=5385078)
+upset(fromExpression(expressionInput), nsets=4, nintersects=30, show.numbers="yes", main.bar.color="#124E63", sets.bar.color="#F6A895", empty.intersections=NULL, order.by = "freq", number.angles = 0, mainbar.y.label ="No. of Intersections", sets.x.label ="Set size")
+invisible(dev.off())
+```
+
+## Quarto
+
+Quarto enables you to weave together content and executable code into a finished document. To learn more about Quarto see <https://quarto.org>.
+
+## Running Code
+
+When you click the **Render** button a document will be generated that includes both content and the output of embedded code. You can embed code like this:
+
+```{r}
+1 + 1
+```
+
+You can add options to executable code like this
+
+```{r}
+#| echo: false
+2 * 2
+```
+
+The `echo: false` option disables the printing of code (only output is displayed).
