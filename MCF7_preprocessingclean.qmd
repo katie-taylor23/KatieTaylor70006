@@ -1,0 +1,1475 @@
+---
+title: "MCF7 Multiomics Preprocessing"
+format: pdf
+editor: visual
+---
+
+# RNA Sequencing Data
+
+Preprocessing of sequencing data followed the given diagram, where we started with FASTA files, performed quality control with FASTQC and MULTIQC, and then alignment and count generation with STAR and Rsubread, respectively.
+
+### Quality control
+
+#### FASTQC
+
+The following pair of documents was submitted as **fastqc.pbs**, with **fastqc.sh** on the HPC.
+
+```{bash, echo = T, eval = F}
+#PBS -l walltime=24:00:00
+#PBS -l select=1:ncpus=8:mem=100gb
+
+#module load java/sun-jdk-1.6.0_19
+module load use.own
+module load FASTQC/0.12.1
+
+#cd $PBS_0_WORKDIR
+
+sh /rds/general/user/kmt23/home/jobs/fastqc_mcf7.sh
+
+```
+
+```{bash, echo = T, eval = F}
+#!/usr/bin/bash
+
+for i in /rds/general/user/kmt23/ephemeral/data/FASTQ_RNASeq/fastq_mcf7/*.fastq
+do
+fastqc $i --outdir /rds/general/user/kmt23/ephemeral/data/FASTQ_RNASeq/fastqc_mcf7
+done
+```
+
+This created .fastqc in the fastqc_mcf7 folder.
+
+#### MULTIQC
+
+MultiQC was run on the login node of the HPC on the created fastqc files, creating the following MultiQC report: [MultiQC report - MCF7 RNA](file:///Users/katietaylor/Documents/fastqc_mcf7/multiqc_report.html)
+
+### Alignment
+
+#### STAR
+
+The following script (**star_mcf7_array.pbs**) was run on the HPC.
+
+```{bash, echo = T, eval = F}
+#Alignment script for paired-end reads
+#PBS -N starmapping
+#PBS -l walltime=24:00:00
+#PBS -l select=1:ncpus=8:mem=48gb
+#PBS -J 1-10
+
+#Set work directory
+cd ${PBS_O_WORKDIR}
+
+#Load STAR module
+module purge
+module load STAR/2.7.11b
+
+#Specifiy input and output directories
+inputdir=/rds/general/user/kmt23/ephemeral/data/FASTQ_RNASeq/fastq_mcf7
+outdir=/rds/general/user/kmt23/ephemeral/data/BAM/star_alignment_mcf7_array2
+list=/rds/general/user/kmt23/home/jobs/array_lists/STAR_mcf7_array.txt
+fq_1=$(awk -v taskID=${PBS_ARRAY_INDEX} '$1==taskID {print $2}' ${list})
+fq_2=$(awk -v taskID=${PBS_ARRAY_INDEX} '$1==taskID {print $3}' ${list})
+
+#Run STAR with the following options
+
+STAR \
+--readFilesIn ${inputdir}/${fq_1} ${inputdir}/${fq_2} \
+--genomeDir /rds/general/user/kmt23/home/src/hg38/hg38dir \
+--sjdbGTFfile /rds/general/user/kmt23/home/src/hg38/hg38gtf.gtf \
+--sjdbOverhang 41 \
+--runThreadN 8 \
+--outFilterMultimapNmax 20 \
+--outFileNamePrefix ${outdir}/${fq_1%.fastq} ${outdir}/${fq_2%.fastq} \
+--outSAMtype BAM SortedByCoordinate \
+--outSAMunmapped Within \
+--outSAMattributes Standard \
+--quantMode GeneCounts \
+--twopassMode Basic \
+--outWigType bedGraph \
+--outWigStrand Stranded
+
+```
+
+**Options explanation (OE):**
+
+-   readFilesIn: gives directory where files should be written in
+-   genomeDir: gives directory to reference genome
+-   sjdbGTFfile: gives directory to reference genome GTF file - used to extract splice junctions
+-   sjdbOverhang: Read length - 1
+-   runThreadN: number of cores available to use
+-   outFilterMultimapNmax: number of multimapped reads allowed, default is only 10
+-   outFileNamePrefix: gives directory to created files
+-   outSAMtype: we created binary alignment files, skipping a samtools submission, we also sorted them, skipping the samtools sort function
+-   outSAMattributes: gives a number of stats associated with the alignment, standard is NH HI AS nM
+    -   NH: number of loci the read maps to, = 1 for unique mappers and \>1 for multimappers
+    -   HI: multiple alignment index
+    -   AS: local alignment score, penalties for indels and gaps, +1/-1 for matches and mismatches
+    -   nM: number of mismatches per paired alignment
+-   outSAMunmapped: the unmapped reads were kept and were flagged in the binary files
+-   quantMode: provided us with counts for comparison to Subread
+-   twoPassMode: how we got the junctions seen in IGV
+-   outWigType: created bedgraph files, as well
+-   outWigStrand: made them stranded
+
+The list (**STAR_mcf7_array.txt**) is given below
+
+```{bash, echo = T, eval = F}
+Array_Index     SampleID_Read_1 SampleID_Read_2
+1	01_4680MRC_BrCa-TREATED-1_RNA_hs_i101_r1.fastq  01_4680MRC_BrCa-TREATED-1_RNA_hs_i101_r2.fastq
+2	02_4680MRC_BrCa-TREATED-2_RNA_hs_i102_r1.fastq  02_4680MRC_BrCa-TREATED-2_RNA_hs_i102_r2.fastq
+3	03_4680MRC_BrCa-TREATED-3_RNA_hs_i103_r1.fastq  03_4680MRC_BrCa-TREATED-3_RNA_hs_i103_r2.fastq
+4	04_4680MRC_BrCa-TREATED-4_RNA_hs_i104_r1.fastq  04_4680MRC_BrCa-TREATED-4_RNA_hs_i104_r2.fastq
+5	05_4680MRC_BrCa-TREATED-5_RNA_hs_i105_r1.fastq  05_4680MRC_BrCa-TREATED-5_RNA_hs_i105_r2.fastq
+6	06_4680MRC_BrCa-CONTROL-1_RNA_hs_i106_r1.fastq  06_4680MRC_BrCa-CONTROL-1_RNA_hs_i106_r2.fastq
+7	07_4680MRC_BrCa-CONTROL-2_RNA_hs_i105_r1.fastq  07_4680MRC_BrCa-CONTROL-2_RNA_hs_i105_r2.fastq
+8	08_4680MRC_BrCa-CONTROL-3_RNA_hs_i108_r1.fastq  08_4680MRC_BrCa-CONTROL-3_RNA_hs_i108_r2.fastq
+9	09_4680MRC_BrCa-CONTROL-4_RNA_hs_i109_r1.fastq  09_4680MRC_BrCa-CONTROL-4_RNA_hs_i109_r2.fastq
+10	10_4680MRC_BrCa-CONTROL-5_RNA_hs_i110_r1.fastq  10_4680MRC_BrCa-CONTROL-5_RNA_hs_i110_r2.fastq
+```
+
+#### SAMSTAT
+
+Samstat was run on the bam files at the file name **samtools_stat_rna_bam.pbs**
+
+```{bash, echo = T, eval = F}
+
+# Sam stat in RNA bam files
+#PBS -l walltime=24:00:00
+#PBS -l select=1:ncpus=8:mem=48gb
+#PBS -J 1-10
+
+# Load appropriate modules
+module load SAMTOOLS/1.19.2
+
+# Define the input and output directories
+inputdir=/rds/general/user/kmt23/ephemeral/data/BAM/star_alignment_mcf7_array
+# Read the input file list
+list=/rds/general/user/kmt23/home/jobs/array_lists/samstat_rna_bam.txt
+fq_1=$(awk -v taskID=${PBS_ARRAY_INDEX} '$1==taskID {print $2}' "${list}")
+
+samtools stats "${inputdir}/${fq_1}"
+
+```
+
+with the list (**samstat_rna_bam.txt**) given below.
+
+```{bash, echo = T, eval = F}
+Array_Index     SampleID
+1	01_4680MRC_BrCa-TREATED-1_RNA_hs_i101_r1.fastqAligned.sortedByCoord.out.bam
+2	02_4680MRC_BrCa-TREATED-2_RNA_hs_i102_r1.fastqAligned.sortedByCoord.out.bam
+3	03_4680MRC_BrCa-TREATED-3_RNA_hs_i103_r1.fastqAligned.sortedByCoord.out.bam
+4	04_4680MRC_BrCa-TREATED-4_RNA_hs_i104_r1.fastqAligned.sortedByCoord.out.bam
+5	05_4680MRC_BrCa-TREATED-5_RNA_hs_i105_r1.fastqAligned.sortedByCoord.out.bam
+6	06_4680MRC_BrCa-CONTROL-1_RNA_hs_i106_r1.fastqAligned.sortedByCoord.out.bam
+7	07_4680MRC_BrCa-CONTROL-2_RNA_hs_i105_r1.fastqAligned.sortedByCoord.out.bam
+8	08_4680MRC_BrCa-CONTROL-3_RNA_hs_i108_r1.fastqAligned.sortedByCoord.out.bam
+9	09_4680MRC_BrCa-CONTROL-4_RNA_hs_i109_r1.fastqAligned.sortedByCoord.out.bam
+10	10_4680MRC_BrCa-CONTROL-5_RNA_hs_i110_r1.fastqAligned.sortedByCoord.out.bam
+```
+
+| Sample       | Total Reads | Reads mapped |
+|--------------|-------------|--------------|
+| 01 Treated 1 | 104,182,978 | 102,178,044  |
+| 02 Treated 2 | 110,853,778 | 107,626,572  |
+| 03 Treated 3 | 90,325,594  | 88,586,900   |
+| 04 Treated 4 | 112,571,086 | 109,950,384  |
+| 05 Treated 5 | 124,914,548 | 122,405,612  |
+| 06 Control 1 | 100,000,244 | 98,197,346   |
+| 07 Control 2 | 79,849,140  | 74,842,224   |
+| 08 Control 3 | 77,416,614  | 76,019,184   |
+| 09 Control 4 | 119,545,936 | 117,307,498  |
+| 10 Control 5 | 120,479,554 | 117,793,156  |
+
+All bam files were then exported to my local hard drive and were subsequently analysed with R.
+
+### RSubread:
+
+#### featureCounts
+
+This was run in the file **RSubreadFeatureCountmcf7.R**
+
+```{r, echo = T, eval = F}
+# Load the Subread package
+library(Rsubread)
+
+# Set path to the directory containing BAM files
+bam_dir <- "/Users/katietaylor/70006/mcf7_bai_bam/star_alignment_mcf7_array"
+
+# List all BAM files in the directory
+bam_files <- list.files(path = bam_dir, pattern = "\\.bam$", full.names = TRUE)
+
+# Set path to the annotation file (e.g., GTF/GFF)
+annotation_file <- "/Users/katietaylor/Documents/hg38gtf.gtf"
+
+# Initialize a list to store read counts matrices for each BAM file
+read_counts_list <- list()
+
+# Loop over each BAM file. GTF.featureType="exon",GTF.attrType="gene_id" set by default
+for (bam_file in bam_files) {
+  # Extract the sample name from the BAM file name
+  sample_name <- sub(".bam$", "", basename(bam_file))
+  
+  # Create a new featureCounts object
+  fc <- featureCounts(files = bam_file, annot.ext = annotation_file, isGTFAnnotation = TRUE, isPairedEnd = TRUE, countMultiMappingReads = TRUE, )
+  
+  # Run featureCounts to generate read counts
+  counts <- featureCounts(files = bam_file, annot.ext = annotation_file, isGTFAnnotation = TRUE, isPairedEnd = TRUE, countMultiMappingReads = TRUE)
+
+  # Access the read counts matrix
+  read_counts <- counts$counts
+  
+
+  
+  # Save the read counts matrix to a text file
+  output_dir <- "/Users/katietaylor/70006/mcf7_counts_exp"
+  output_file <- paste0(sample_name, "_read_counts.txt")
+  write.table(read_counts, file = output_file, sep = "\t", quote = FALSE, col.names = NA)
+  
+}
+```
+
+::: callout-note
+All subsequent analysis was completed in the file **mcf7_RNA_explore_DE.R**
+:::
+
+------------------------------------------------------------------------
+
+# ChIP Sequencing Data
+
+Preprocessing of sequencing data followed the given diagram, where we started with FASTA files, performed quality control with FASTQC and MULTIQC, and then aligned with bwa-mem2. We sorted, indexed, and filtered the blacklist with samtools and bedtools, and then we called peaks and filtered duplicates with MACS3.
+
+### Quality control
+
+#### FASTQC
+
+The following script was submitted as **fastqc_chip_mcf7.pbs** on the HPC
+
+```{bash, echo = T, eval = F}
+#PBS -l walltime=24:00:00
+#PBS -l select=1:ncpus=8:mem=100gb
+#PBS -J 1-13
+
+#module load java/sun-jdk-1.6.0_19
+module load FASTQC/0.12.1
+
+cd $PBS_0_WORKDIR
+list=/rds/general/user/kmt23/home/jobs/array_lists/CHIP_mcf7_fastqc_array.txt 
+st=$(awk -v taskID=${PBS_ARRAY_INDEX} '$1==taskID {print $2}' ${list})
+inputdir=/rds/general/user/kmt23/ephemeral/data/FASTQ_ChIPSeq/fastq/mcf7_chip
+
+fastqc "${inputdir}/${st}" --outdir /rds/general/user/kmt23/ephemeral/data/FASTQ_ChIPSeq/fastqc
+```
+
+with the associated array text file given at **CHIP_mcf7_fastqc_array.txt**
+
+```{bash, echo = T, eval = F}
+Array_Index     SampleID
+1	00_0AVT_01JNMRC_Pooled_Input_hs_i53.fastq.gz
+2	01_0AVI_01JNMRC_CONTROL-1_H3K4me3_hs_i48.fastq.gz
+3	02_0AVJ_01JNMRC_CONTROL-2_H3K4me3_hs_i49.fastq.gz
+4	03_0AVK_01JNMRC_TREATED-1_H3K4me3_hs_i50.fastq.gz
+5	04_0AVL_01JNMRC_TREATED-2_H3K4me3_hs_i52.fastq.gz
+6	05_0AVE_01JNMRC_CONTROL-3_H3K4me1_hs_i40.fastq.gz
+7	06_0AVF_01JNMRC_CONTROL-4_H3K4me1_hs_i43.fastq.gz
+8	07_0AVG_01JNMRC_TREATED-3_H3K4me1_hs_i44.fastq.gz
+9	08_0AVH_01JNMRC_TREATED-4_H3K4me1_hs_i45.fastq.gz
+10	09_0AVA_01JNMRC_CONTROL-5_H3K27Ac_hs_i86.fastq.gz
+11	10_0AVB_01JNMRC_CONTROL-6_H3K27Ac_hs_i94.fastq.gz
+12	11_0AVC_01JNMRC_TREATED-5_H3K27Ac_hs_i95.fastq.gz
+13	12_0AVD_01JNMRC_TREATED-6_H3K27Ac_hs_i96.fastq.gz
+```
+
+#### MULTIQC
+
+MultiQC was run with the following script (**multiqc_chip_mcf7.pbs**)
+
+```{bash, echo = T, eval = F}
+#PBS -l walltime=24:00:00
+#PBS -l select=1:ncpus=8:mem=100gb
+
+#module load java/sun-jdk-1.6.0_19
+module load MULTIQC/1.21 
+
+#cd $PBS_0_WORKDIR
+
+cd /rds/general/user/kmt23/ephemeral/data/FASTQ_ChIPSeq/fastqc
+
+multiqc .
+
+# Print message indicating job completion
+echo "MultiQC analysis complete."
+```
+
+creating the following MultiQC report: [MultiQC - MCF7 ChIP](file:///Users/katietaylor/70006/CHIP_mcf7/multiqc_report.html)
+
+### Alignment
+
+#### BWA-MEM2 - reference genome
+
+he following script (**hg38indexbwamem2.pbs**) was run on the HPC.
+
+```{bash, echo = T, eval = F}
+
+#PBS -l walltime=24:00:00
+#PBS -l select=1:ncpus=8:mem=96gb
+
+# load the module that we created
+module load BWAMEM2/2.2.1
+
+# do this in a separate working directory
+cd $PBS_O_WORKDIR 
+
+# options for STAR
+bwa-mem2 index -p hg38p /rds/general/user/kmt23/home/src/hg38/hg38p.fasta
+```
+
+**OE:**
+
+-   p: sets the prefix for the reference genome directory
+
+#### BWA-MEM2 - fasta files
+
+The following script (**star_mcf7_array.pbs**) was run on the HPC.
+
+```{bash, echo = T, eval = F}
+# Alingment script for ChIP-seq with BWAMEM2
+#PBS -l walltime=24:00:00
+#PBS -l select=1:ncpus=8:mem=32gb
+#PBS -J 1-13
+
+# Load appropriate modules
+module load BWAMEM2/2.2.1
+
+# Set working directory
+cd $PBS_0_WORKDIR
+
+inputdir=/rds/general/user/kmt23/ephemeral/data/FASTQ_ChIPSeq/fastq/mcf7_chip
+outputdir=/rds/general/user/kmt23/ephemeral/data/SAM_CHIP/realigned
+list=/rds/general/user/kmt23/home/jobs/array_lists/BWAMEM2_mcf7_chip_array.txt
+fq_1=$(awk -v taskID=${PBS_ARRAY_INDEX} '$1==taskID {print $2}' ${list})
+
+# Run BWA-MEM2 with the following options
+bwa-mem2 mem -t 8 /rds/general/user/kmt23/home/src/hg38/hg38p.fa \
+         ${inputdir}/${fq_1} > ${outputdir}/${fq_1}.sam
+
+```
+
+**OE:**
+
+-   t: sets the number of threads
+
+### Indexing, sorting, filtering, etc.
+
+#### Samtools - reference genome
+
+Submitted as **hg38p_faidx.pbs**
+
+```{bash, echo = T, eval = F}
+# Generate hg index file
+#PBS -l walltime=01:00:00
+#PBS -l select=1:ncpus=8:mem=128gb
+
+#load necessary moduels
+module load SAMTOOLS/1.19.2
+cd $PBS_0_WORKDIR
+
+genome_fasta=/rds/general/user/kmt23/home/src/hg38/hg38p.fa
+samtools faidx "${genome_fasta}"
+```
+
+#### Samtools - sample .sam files
+
+Submitted as **mcf7_chip_SAMTOOLS_bRM2.pbs**
+
+```{bash, echo = T, eval = F}
+# SAM to BAM, sorting, indexing, filtering out blacklisted regions, and calculating effective genome size
+#PBS -l walltime=24:00:00
+#PBS -l select=1:ncpus=8:mem=48gb
+#PBS -J 1-13
+
+# Load appropriate modules
+module load SAMTOOLS/1.19.2
+module load BEDTOOLS/2.31.1
+
+# Set working directory
+cd $PBS_0_WORKDIR
+
+inputdir=/rds/general/user/kmt23/ephemeral/data/SAM_CHIP/realigned
+outputdir=/rds/general/user/kmt23/ephemeral/data/SAM_CHIP/realigned/BAM_BAI
+outputdir_noB=/rds/general/user/kmt23/ephemeral/data/SAM_CHIP/realigned/BAM_BAI/noB
+blacklist_file=/rds/general/user/kmt23/home/src/hg38/hg38chipblacklist/ENCFF356LFX.bed
+genome_file=/rds/general/user/kmt23/home/src/hg38/hg38p.fa.fai
+list=/rds/general/user/kmt23/home/jobs/array_lists/SAMTOOLS_CHIP_array_list.txt
+fq_1=$(awk -v taskID=${PBS_ARRAY_INDEX} '$1==taskID {print $2}' ${list})
+
+# Remove the ".bam" extension from the output file names
+output_file="${fq_1%.fastq.gz.sam}.bam"
+sorted_output_file="${fq_1%.fastq.gz.sam}_sorted.bam"
+filtered_output_file="${fq_1%.fastq.gz.sam}_noM.bam"
+
+# 1. Convert SAM to BAM
+samtools view -bS "${inputdir}/${fq_1}" -o "${outputdir}/${output_file}"
+
+# 2. Sort BAM
+samtools sort "${outputdir}/${output_file}" -o "${outputdir}/${sorted_output_file}"
+
+# 4. Filter out blacklisted regions
+bedtools intersect -v -abam "${outputdir}/${sorted_output_file}" -b "${blacklist_file}" > "${outputdir_noB}/${filtered_output_file}"
+
+# 3. Index BAM
+samtools index "${outputdir_noB}/${filtered_output_file}"
+
+# 5. Calculate effective genome size
+total_genome_size=$(awk '{sum += $2} END {print sum}' "${genome_file}")
+blacklisted_regions_size=$(bedtools merge -i "${blacklist_file}" | awk '{sum += $3 - $2} END {print sum}')
+effective_genome_size=$((total_genome_size - blacklisted_regions_size))
+
+echo "Effective Genome Size: ${effective_genome_size}"
+```
+
+**OE:**
+
+-   bS: denotes that input is SAM, output is bam
+
+-   v: only keep sections that do not intersect at all with the blacklisted region
+
+-   abam: each bam file A is compared to bam file B
+
+-   Effective genome size is given for downstream analysis
+
+#### SAMSTAT
+
+Samstat was run on the bam files at the file name **samtools_stat_chip_sam.pbs**
+
+```{bash, echo = T, eval = F}
+
+# Sam stat in CHIP sam files
+#PBS -l walltime=24:00:00
+#PBS -l select=1:ncpus=8:mem=48gb
+#PBS -J 1-13
+
+# Load appropriate modules
+module load SAMTOOLS/1.19.2
+
+# Define the input and output directories
+inputdir=/rds/general/user/kmt23/ephemeral/data/SAM_CHIP/realigned
+# Read the input file list
+list=/rds/general/user/kmt23/home/jobs/array_lists/SAMTOOLS_CHIP_array_list.txt
+fq_1=$(awk -v taskID=${PBS_ARRAY_INDEX} '$1==taskID {print $2}' "${list}")
+
+samtools stats "${inputdir}/${fq_1}"
+```
+
+giving the following table:
+
+| Sample               | Total Reads | Mapped Reads |
+|----------------------|-------------|--------------|
+| 00 Pooled Input      | 51,092,093  | 50,653,407   |
+| 01 Control 1 H3K4Me3 | 42,569,712  | 41,923,080   |
+| 02 Control 2 H3K4Me3 | 41,350,055  | 40,411,258   |
+| 03 Treated 1 H3K4Me3 | 39,412,624  | 38,379,731   |
+| 04 Treated 2 H3K4Me3 | 42,104,034  | 41,205,530   |
+| 05 Control 3 H3K4Me1 | 48,381,672  | 47,831,231   |
+| 06 Control 4 H3K4Me1 | 43,462,276  | 43,084,654   |
+| 07 Treated 3 H3K4Me1 | 43,783,440  | 43,101,646   |
+| 08 Treated 4 H3K4Me1 | 51,344,621  | 50,756,680   |
+| 09 Control 5 H3K27Ac | 34,939,450  | 34,189,008   |
+| 10 Control 6 H3K27Ac | 30,639,230  | 29,880,920   |
+| 11 Treated 5 H3K27Ac | 36,995,373  | 36,339,263   |
+| 12 Treated 6 H3K27Ac | 39,046,814  | 38,454,031   |
+
+### Peak calling,
+
+#### MACS3 filterdup, predictd
+
+Submitted to HPC as **mcf7_chip_MACS_filterdup_predictd_bRM2.pbs**
+
+```{bash, echo = T, eval = F}
+# SAM to BAM, sorting, and indexing
+#PBS -l walltime=24:00:00
+#PBS -l select=1:ncpus=8:mem=32gb
+#PBS -J 1-13
+
+# Load appropriate modules
+module load MACS3/3.0.1
+
+# Set working directory
+cd $PBS_0_WORKDIR
+
+inputdir=/rds/general/user/kmt23/ephemeral/data/SAM_CHIP/realigned/BAM_BAI/noB
+outputdir=/rds/general/user/kmt23/ephemeral/data/SAM_CHIP/realigned/BAM_BAI/noB/noDup
+list=/rds/general/user/kmt23/home/jobs/array_lists/MACS2_filter_chip.txt
+fq_1=$(awk -v taskID=${PBS_ARRAY_INDEX} '$1==taskID {print $2}' ${list})
+
+macs3 filterdup -i ${inputdir}/${fq_1} -f BAM -g 3028180433 --keep-dup=1 --verbose=3 -o ${outputdir}/${fq_1}_filterdup.bed 
+macs3 predictd -i ${outputdir}/${fq_1}_filterdup.bed -g 3028180433 -m 5 20
+```
+
+-   i: path to input file
+
+-   f: format is BAM
+
+-   g: predicted genome size - found with [Samtools - sample .sam files].
+
+-   keep-dup: only kept on duplicate
+
+-   verbose=3: for troubles with submitting
+
+-   o: path to output file
+
+-   m: Select the regions within MFOLD range of high-confidence enrichment ratio against background to build the model. Fold-enrichment in regions must be lower than the upper limit and higher than the lower limit. DEFAULT: 5 50
+
+Later on, we decided not to filter duplicates, so we ultimately called peaks on the files that were NOT filtered for duplicates
+
+#### MACS3 callpeaks
+
+Submitted as **chip_mcf7_macs3Peakcalling2.pbs**
+
+```{bash, echo = T, eval = F}
+# Generating a pileup graph, peak calling
+#PBS -l walltime=24:00:00
+#PBS -l select=1:ncpus=8:mem=32gb
+#PBS -J 1-12
+
+# Load appropriate modules
+module load MACS3/3.0.1
+
+# Set working directory
+cd $PBS_0_WORKDIR
+
+inputdir=/rds/general/user/kmt23/ephemeral/data/SAM_CHIP/realigned/BAM_BAI/noB/noDup
+outputdir=/rds/general/user/kmt23/ephemeral/data/SAM_CHIP/realigned/BAM_BAI/noB/noDup/Peaks
+control_dir="/rds/general/user/kmt23/ephemeral/data/SAM_CHIP/realigned/BAM_BAI/noB/noDup/00_0AVT_01JNMRC_Pooled_Input_hs_i53_noM.bam_filterdup.bed"
+list=/rds/general/user/kmt23/home/jobs/array_lists/chip_MACS3_mcf7_peak_2.txt
+
+fq_1=$(awk -v taskID=${PBS_ARRAY_INDEX} '$1==taskID {print $2}' ${list})
+fq_2=$(awk -v taskID=${PBS_ARRAY_INDEX} '$1==taskID {print $3}' ${list})
+fq_3=$(awk -v taskID=${PBS_ARRAY_INDEX} '$1==taskID {print $4}' ${list})
+
+# 1. Create pileup graph
+macs3 pileup -i ${inputdir}/${fq_1} -o ${inputdir}/${fq_3}.pileup.bdg -f BED --extsize ${fq_2}
+
+# 2. Call MACS3 with specified arguments
+macs3 callpeak -t "${inputdir}/${fq_1}" -c "${control_dir}" -g 3028180433 -n "${outputdir}/${fq_3}" \
+-f BED --bdg --nomodel --extsize ${fq_2} --outdir "${outputdir}"
+
+```
+
+**OE:**
+
+-   i: path to input file
+
+-   o, outdir: path to output file
+
+-   t: treatment - in this case, all 12 of the sample files
+
+    -   This is the only REQUIRED parameter for MACS3. The file can be in any supported format – see detail in the `--format` option. If you have more than one alignment file, you can specify them as `-t A B C`. MACS3 will pool up all these files together.
+
+-   c: control - pooled input
+
+-   g: predicted genome size - found with [Samtools - sample .sam files].
+
+-   n: name - where I shortened sample names
+
+-   f: indicates format of output file for peaks
+
+-   bdg: If this flag is on, MACS3 will store the fragment pileup, control lambda in bedGraph files
+
+-   nomodel: While on, MACS3 will bypass building the shifting model
+
+    -   recommended to keep shift at 0 for Chip-peak datasets
+
+-   extsize: predicted fragment sizes, given by [MACS3 filterdup, predictd]
+
+The .txt file is given at **chip_MACS3_mcf7_peak_2.txt**
+
+```{bash, echo = T, eval = F}
+Array_Index     SampleID_1	SampleID_2 SampleID_3
+1	01_0AVI_01JNMRC_CONTROL-1_H3K4me3_hs_i48_noM.bam_filterdup.bed  183     01_Control1_H3K4Me3
+2	02_0AVJ_01JNMRC_CONTROL-2_H3K4me3_hs_i49_noM.bam_filterdup.bed  186     02_Control2_H3K4Me3
+3	03_0AVK_01JNMRC_TREATED-1_H3K4me3_hs_i50_noM.bam_filterdup.bed  199     03_Treated1_H3K4Me3
+4	04_0AVL_01JNMRC_TREATED-2_H3K4me3_hs_i52_noM.bam_filterdup.bed  181     04_Treated2_H3K4Me3
+5	05_0AVE_01JNMRC_CONTROL-3_H3K4me1_hs_i40_noM.bam_filterdup.bed  208     05_Control3_H3K4Me1
+6	06_0AVF_01JNMRC_CONTROL-4_H3K4me1_hs_i43_noM.bam_filterdup.bed  193     06_Control4_H3K4Me1
+7	07_0AVG_01JNMRC_TREATED-3_H3K4me1_hs_i44_noM.bam_filterdup.bed  183     07_Treated3_H3K4Me1
+8	08_0AVH_01JNMRC_TREATED-4_H3K4me1_hs_i45_noM.bam_filterdup.bed  204     08_Treated4_H3K4Me1
+9	09_0AVA_01JNMRC_CONTROL-5_H3K27Ac_hs_i86_noM.bam_filterdup.bed  203     09_Control5_H3K27Ac
+10	10_0AVB_01JNMRC_CONTROL-6_H3K27Ac_hs_i94_noM.bam_filterdup.bed  199     10_Control6_H3K27Ac
+11	11_0AVC_01JNMRC_TREATED-5_H3K27Ac_hs_i95_noM.bam_filterdup.bed  206     11_Treated5_H3K27Ac
+12	12_0AVD_01JNMRC_TREATED-6_H3K27Ac_hs_i96_noM.bam_filterdup.bed  216     12_Treated6_H3K27Ac
+```
+
+::: callout-note
+:::
+
+Second time around peakcalling without duplicates.
+
+```{bash}
+# Generating a pileup graph, peak calling
+#PBS -l walltime=24:00:00
+#PBS -l select=1:ncpus=8:mem=32gb
+#PBS -J 1-12
+
+# Load appropriate modules
+module load MACS3/3.0.1
+
+# Set working directory
+cd $PBS_0_WORKDIR
+
+inputdir=/rds/general/user/kmt23/ephemeral/data/SAM_CHIP/realigned/BAM_BAI/noB
+outputdir=/rds/general/user/kmt23/ephemeral/data/SAM_CHIP/realigned/BAM_BAI/noB/Peaks
+control_dir="/rds/general/user/kmt23/ephemeral/data/SAM_CHIP/realigned/BAM_BAI/noB/00_0AVT_01JNMRC_Pooled_Input_hs_i53_noM.bam"
+list=/rds/general/user/kmt23/home/jobs/array_lists/chip_MACS3_mcf7_peak_2.txt
+
+fq_1=$(awk -v taskID=${PBS_ARRAY_INDEX} '$1==taskID {print $2}' ${list})
+fq_2=$(awk -v taskID=${PBS_ARRAY_INDEX} '$1==taskID {print $3}' ${list})
+fq_3=$(awk -v taskID=${PBS_ARRAY_INDEX} '$1==taskID {print $4}' ${list})
+
+# 1. Create pileup graph
+macs3 pileup -i ${inputdir}/${fq_1} -o ${inputdir}/${fq_3}.pileup.bdg -f BED --extsize ${fq_2}
+
+# 2. Call MACS3 with specified arguments
+macs3 callpeak -t "${inputdir}/${fq_1}" -c "${control_dir}" -g 2913022398 -n "${outputdir}/${fq_3}" \
+-f BAM --bdg --nomodel --extsize ${fq_2} --outdir "${outputdir}"
+```
+
+------------------------------------------------------------------------
+
+# ATAC Sequencing Data
+
+Preprocessing of sequencing data followed the given diagram, where we started with FASTA files, performed quality control with FASTQC and MULTIQC, and then aligned with bwa-mem2. We sorted, indexed, and filtered with samtools and bedtools, and then we called peaks and filtered duplicates with MACS3 HMMRATAC
+
+### Quality Control
+
+#### FASTQC
+
+Submitted with **fastqc_atac_mcf7_array.pbs**
+
+```{bash, echo = T, eval = F}
+#PBS -l walltime=1:00:00
+#PBS -l select=1:ncpus=8:mem=32gb
+#PBS -J 1-8
+
+#module load java/sun-jdk-1.6.0_19
+module load FASTQC/0.12.1
+
+cd $PBS_0_WORKDIR
+list=/rds/general/user/kmt23/home/jobs/array_lists/ATAC_fastqc_array.txt
+st=$(awk -v taskID=${PBS_ARRAY_INDEX} '$1==taskID {print $2}' ${list})
+
+inputdir=/rds/general/user/kmt23/ephemeral/data/FASTQ_ATACSeq/fastq
+fastqc "${inputdir}/${st}" --outdir /rds/general/user/kmt23/ephemeral/data/FASTQ_ATACSeq/fastqc
+```
+
+#### MULTIQC
+
+Submitted with **multiqc_atac.pbs**
+
+```{bash, echo = T, eval = F}
+#PBS -l walltime=24:00:00
+#PBS -l select=1:ncpus=8:mem=100gb
+
+#module load java/sun-jdk-1.6.0_19
+module load MULTIQC/1.21 
+
+#cd $PBS_0_WORKDIR
+
+cd /rds/general/user/kmt23/ephemeral/data/FASTQ_ATACSeq/fastqc
+
+multiqc .
+
+# Print message indicating job completion
+echo "MultiQC analysis complete."
+
+```
+
+Generated the following MULTIQC report: [MultiQC - MCF7 ATAC](file:///Users/katietaylor/70006/ATAC_mcf7/multiqc_report.html)
+
+### Alignment
+
+Previously generated aligned reference genome ([BWA-MEM2 - reference genome]) was used for aligning of ATAC-Seq samples
+
+#### BWA-MEM2 sample .sam files (paired end)
+
+Submitted as **mcf7_atac_bwa_align2.pbs.**
+
+```{bash, echo = T, eval = F}
+# Alingment script for paired end reads for ATAC seq with BWAMEM2
+#PBS -l walltime=24:00:00
+#PBS -l select=1:ncpus=8:mem=32gb
+#PBS -J 1-4
+
+# Load appropriate modules
+module load BWAMEM2/2.2.1
+
+# Set working directory
+cd $PBS_0_WORKDIR
+
+inputdir=/rds/general/user/kmt23/ephemeral/data/FASTQ_ATACSeq/fastq
+outputdir=/rds/general/user/kmt23/ephemeral/data/SAM_ATAC/realigned
+list=/rds/general/user/kmt23/home/jobs/array_lists/BWAMEM2_mcf7_atac_array.txt
+fq_1=$(awk -v taskID=${PBS_ARRAY_INDEX} '$1==taskID {print $2}' ${list})
+fq_2=$(awk -v taskID=${PBS_ARRAY_INDEX} '$1==taskID {print $3}' ${list})
+
+# Run BWA-MEM2 with the following options
+bwa-mem2 mem -t 8 /rds/general/user/kmt23/home/src/hg38/hg38p.fa \
+	 ${inputdir}/${fq_1} ${inputdir}/${fq_2} > ${outputdir}/${fq_1}.sam	
+```
+
+**OE:**
+
+-   t: sets the number of threads
+
+### Indexing, sorting, filtering
+
+Previously generated indexed reference genome ([Samtools - reference genome]) was used for indexing of ATAC-Seq samples
+
+#### Samtools - sample .sam files
+
+Submitted as **ATAC_mcf7_SAMTOOLS.pbs.**
+
+```{bash, echo = T, eval = F}
+# SAM to BAM, sorting, and indexing
+#PBS -l walltime=24:00:00
+#PBS -l select=1:ncpus=8:mem=32gb
+#PBS -J 1-4
+
+# Load appropriate modules
+module load SAMTOOLS/1.19.2  
+
+# Set working directory
+cd $PBS_0_WORKDIR
+
+inputdir=/rds/general/user/kmt23/ephemeral/data/SAM_ATAC
+outputdir=/rds/general/user/kmt23/ephemeral/data/SAM_ATAC/BAM_BAI
+list=/rds/general/user/kmt23/home/jobs/array_lists/SAMTOOLS_ATAC_array_list.txt 
+fq_1=$(awk -v taskID=${PBS_ARRAY_INDEX} '$1==taskID {print $2}' ${list})
+
+# 1. Convert SAM to BAM
+samtools view -bS ${inputdir}/${fq_1} -o ${outputdir}/${fq_1}.bam	
+
+# 2. Sort BAM
+samtools sort ${outputdir}/${fq_1}.bam -o ${outputdir}/sorted_${fq_1}.bam
+
+# 3. Index BAM
+samtools index ${outputdir}/sorted_${fq_1}.bam ${outputdir}/sorted_${fq_1}.bam.bai
+```
+
+**OE:**
+
+-   bS: denotes that input is SAM, output is bam
+
+#### SAMSTAT
+
+Submitted as samtools_stat_atac_sam.pbs
+
+```{bash, echo = T, eval = F}
+# filtering multimpaped reads in ATAC bam files
+#PBS -l walltime=24:00:00
+#PBS -l select=1:ncpus=8:mem=48gb
+#PBS -J 1-4
+
+# Load appropriate modules
+module load SAMTOOLS/1.19.2
+
+# Define the input and output directories
+inputdir=/rds/general/user/kmt23/ephemeral/data/SAM_ATAC/realigned
+
+# Read the input file list
+list=/rds/general/user/kmt23/home/jobs/array_lists/SAMTOOLS_ATAC_array_list.txt
+fq_1=$(awk -v taskID=${PBS_ARRAY_INDEX} '$1==taskID {print $2}' "${list}")
+
+samtools stats "${inputdir}/${fq_1}"
+```
+
+with *SAMTOOLS_ATAC_array_list.txt*
+
+```{bash, echo = T, eval = F}
+Array_Index     SampleID
+1	1_0A5L_01JKMRC_BrCa-TREATED-1_ATAC_hs_i201_r1.fastq.sam
+2	2_0A5M_01JKMRC_BrCa-TREATED-2_ATAC_hs_i202_r1.fastq.sam
+3	3_0A5N_01JKMRC_BrCa-CONTROL-1_ATAC_hs_i203_r1.fastq.sam
+4	4_0A5O_01JKMRC_BrCa-CONTROL-2_ATAC_hs_i204_r1.fastq.sam
+
+```
+
+Produced values for the following table:
+
+| Sample      | Total reads | Mapped reads |
+|-------------|-------------|--------------|
+| 1 Treated 1 | 57,894,239  | 56,081,921   |
+| 2 Treated 2 | 49,451,766  | 48,178,643   |
+| 3 Control 1 | 59,204,307  | 56,057,673   |
+| 4 Control 2 | 52,273,871  | 50,735,568   |
+
+#### Filtering Mitochondrial reads
+
+Submitted as **mcf7_atac_rm_M.pbs**
+
+```{bash, echo = T, eval = F}
+# filtering mitochondrial reads in ATAC bam files
+#PBS -l walltime=24:00:00
+#PBS -l select=1:ncpus=8:mem=48gb
+#PBS -J 1-4
+
+# Load appropriate modules
+module load SAMTOOLS/1.19.2
+
+# Define the input and output directories
+input_dir="/rds/general/user/kmt23/ephemeral/data/SAM_ATAC/BAM_BAI"
+output_dir="/rds/general/user/kmt23/ephemeral/data/SAM_ATAC/BAM_BAI/mcf7_atac_noM"
+
+# Read the input file list
+list="/rds/general/user/kmt23/home/jobs/array_lists/atac_mcf7_mit_rm.txt"
+fq_1=$(awk -v taskID=${PBS_ARRAY_INDEX} '$1==taskID {print $2}' "${list}")
+
+# Define the command
+samtools view "${input_dir}/${fq_1}" | egrep -v chrM | samtools view -bT "/rds/general/user/kmt23/home/src/hg38/hg38p.fa" -o "${output_dir}/${fq_1}_filtered_M.bam"
+
+```
+
+**OE:**
+
+-   bT: denotes that output is bam, provides additional reference data
+
+-   v: as denoted above, will exclude any mitochondrial reads
+
+We then filtered to create the following sets of bam files.
+
+|                                                        |                            |
+|-----------------------------------------------|------------------------|
+| Alignment Sieve ATACshift & multimapped reads filtered | Multimapped reads filtered |
+| Alignment Sieve Filtered                               | No extra filters           |
+
+#### Filtering multimapped reads
+
+Submitted as **mcf7_atac_MM_rm.pbs.**
+
+```{bash, echo = T, eval = F}
+# filtering mitochondrial reads in ATAC bam files
+#PBS -l walltime=24:00:00
+#PBS -l select=1:ncpus=8:mem=48gb
+#PBS -J 1-4
+
+# Load appropriate modules
+module load SAMTOOLS/1.19.2
+
+# Define the input and output directories
+input_dir="/rds/general/user/kmt23/ephemeral/data/SAM_ATAC/BAM_BAI/mcf7_atac_noM"
+output_dir="/rds/general/user/kmt23/ephemeral/data/SAM_ATAC/BAM_BAI/mcf7_atac_noM/mcf7_atac_nomulti"
+
+# Read the input file list
+list="/rds/general/user/kmt23/home/jobs/array_lists/mcf7_atac_MM_rm.txt"
+fq_1=$(awk -v taskID=${PBS_ARRAY_INDEX} '$1==taskID {print $2}' "${list}")
+
+# Define the command
+samtools view -F 256 "${input_dir}/${fq_1}" -o "${output_dir}/${fq_1}multimapped_filtered_M.bam"
+```
+
+**OE:**
+
+-   Remove not primary mapped reads
+
+#### Shifting with AlignmentSieve
+
+With multimapped reads - submitted as **mcf7_atac_YMM_AS.pbs.**
+
+```{bash, echo = T, eval = F}
+# Filtering NMM with AlignmentSieve
+#PBS -l walltime=24:00:00
+#PBS -l select=1:ncpus=8:mem=48gb
+#PBS -J 1-4
+
+# Set working directory
+cd $PBS_0_WORKDIR
+
+# Load appropriate modules
+module load DEEPTOOLS/3.5.5
+module load SAMTOOLS/1.19.2  
+
+# Define the input and output directories
+input_dir="/rds/general/user/kmt23/ephemeral/data/SAM_ATAC/realigned/BAM_BAI/noM"
+output_dir="/rds/general/user/kmt23/ephemeral/data/SAM_ATAC/realigned/BAM_BAI/noM/mcf7_HMMRATAC_YMM"
+
+# Read the input file list
+list="/rds/general/user/kmt23/home/jobs/array_lists/mcf7_atac_YMM.txt"
+fq_1=$(awk -v taskID=${PBS_ARRAY_INDEX} '$1==taskID {print $2}' "${list}")
+
+# Define the command
+samtools index "${input_dir}/${fq_1}" "${input_dir}/${fq_1}.bai"
+alignmentSieve -b "${input_dir}/${fq_1}" -o "${output_dir}/${fq_1}_ASF.bam" --ATACshift
+```
+
+Without multimapped reads - first had to index the multimapped read filtered bam files - submitted as **mcf7_atac_index_NMM_AS.pbs.**
+
+```{bash, echo = T, eval = F}
+# Filtering NMM with AlignmentSieve & creating index for NMM
+#PBS -l walltime=24:00:00
+#PBS -l select=1:ncpus=8:mem=48gb
+#PBS -J 1-4
+
+# Set working directory
+cd $PBS_0_WORKDIR
+
+# Load appropriate modules
+module load DEEPTOOLS/3.5.5
+module load SAMTOOLS/1.19.2 
+
+# Define the input and output directories
+input_dir="/rds/general/user/kmt23/ephemeral/data/SAM_ATAC/realigned/BAM_BAI/noM/nomulti"
+output_dir="/rds/general/user/kmt23/ephemeral/data/SAM_ATAC/realigned/BAM_BAI/noM/nomulti/AlignmentSieve"
+
+# Read the input file list
+list="/rds/general/user/kmt23/home/jobs/array_lists/mcf7_atac_NMM.txt"
+fq_1=$(awk -v taskID=${PBS_ARRAY_INDEX} '$1==taskID {print $2}' "${list}")
+
+# Define the command
+samtools index "${input_dir}/${fq_1}" "${input_dir}/${fq_1}.bai"
+alignmentSieve -b "${input_dir}/${fq_1}" -o "${output_dir}/${fq_1}_ASF.bam" --ATACshift
+```
+
+**OE:**
+
+-   b: input file is an indexed bam file
+
+-   o: output file
+
+-   ATACshift: Shift the produced BAM file or BEDPE regions as commonly done for ATAC-seq. This is equivalent to –shift 4 -5 5 -4.
+
+### Peak calling
+
+#### MACS3 HMMRATAC
+
+submitted as **mcf7_atac_NMM_AS_HMMRATAC.pbs**
+
+```{bash, echo = T, eval = F}
+
+# Calling non-multimapped_ASfiltered filtered peaks with MACS3 HMMRATAC
+#PBS -l walltime=24:00:00
+#PBS -l select=1:ncpus=8:mem=64gb
+#PBS -J 1-4
+
+# Set working directory
+cd $PBS_0_WORKDIR
+
+# Load appropriate modules
+module load MACS3/3.0.1
+
+# Define the input and output directories
+input_dir="/rds/general/user/kmt23/ephemeral/data/SAM_ATAC/realigned/BAM_BAI/noM/nomulti/AlignmentSieve"
+output_dir="/rds/general/user/kmt23/ephemeral/data/SAM_ATAC/realigned/BAM_BAI/noM/nomulti/AlignmentSieve/mcf7_HMMRATAC_NMM_AS"
+
+# Read the input file list
+list="/rds/general/user/kmt23/home/jobs/array_lists/mcf7_atac_NMM_AS_HMMRATAC.txt"
+fq_1=$(awk -v taskID=${PBS_ARRAY_INDEX} '$1==taskID {print $2}' "${list}")
+fq_2=$(awk -v taskID=${PBS_ARRAY_INDEX} '$1==taskID {print $3}' "${list}")
+
+# Define the command
+macs3 hmmratac -i "${input_dir}/${fq_1}" -n ${fq_2} --outdir ${output_dir}
+```
+
+Submitted as **mcf7_atac_YMM_AS_HMMRATAC.pbs**
+
+```{bash, echo = T, eval = F}
+# Calling non-multimapped_ASfiltered filtered peaks with MACS3 HMMRATAC
+#PBS -l walltime=24:00:00
+#PBS -l select=1:ncpus=8:mem=64gb
+#PBS -J 1-4
+
+# Set working directory
+cd $PBS_0_WORKDIR
+
+# Load appropriate modules
+module load MACS3/3.0.1
+
+# Define the input and output directories
+input_dir="/rds/general/user/kmt23/ephemeral/data/SAM_ATAC/realigned/BAM_BAI/noM/AlignmentSieve"
+output_dir="/rds/general/user/kmt23/ephemeral/data/SAM_ATAC/realigned/BAM_BAI/noM/AlignmentSieve/mcf7_HMMRATAC_YMM_AS"
+
+# Read the input file list
+list="/rds/general/user/kmt23/home/jobs/array_lists/mcf7_atac_YMM_AS_HMMRATAC.txt"
+fq_1=$(awk -v taskID=${PBS_ARRAY_INDEX} '$1==taskID {print $2}' "${list}")
+fq_2=$(awk -v taskID=${PBS_ARRAY_INDEX} '$1==taskID {print $3}' "${list}")
+
+# Define the command
+macs3 hmmratac -i "${input_dir}/${fq_1}" -n ${fq_2} --outdir ${output_dir}
+```
+
+Submitted as **mcf7_macs_HMMRATAC_NMM.pbs**
+
+```{bash, echo = T, eval = F}
+# Calling multimapped filtered peaks with MACS3 HMMRATAC
+#PBS -l walltime=24:00:00
+#PBS -l select=1:ncpus=8:mem=64gb
+#PBS -J 1-4
+
+# Set working directory
+cd $PBS_0_WORKDIR
+
+# Load appropriate modules
+module load MACS3/3.0.1
+
+# Define the input and output directories
+input_dir="/rds/general/user/kmt23/ephemeral/data/SAM_ATAC/realigned/BAM_BAI/noM/nomulti"
+output_dir="/rds/general/user/kmt23/ephemeral/data/SAM_ATAC/realigned/BAM_BAI/noM/nomulti/mcf7_HMMRATAC_NMM"
+
+# Read the input file list
+list="/rds/general/user/kmt23/home/jobs/array_lists/mcf7_atac_NMM.txt"
+fq_1=$(awk -v taskID=${PBS_ARRAY_INDEX} '$1==taskID {print $2}' "${list}")
+fq_2=$(awk -v taskID=${PBS_ARRAY_INDEX} '$1==taskID {print $3}' "${list}")
+
+# Define the command
+macs3 hmmratac -i "${input_dir}/${fq_1}" -n ${fq_2} --outdir ${output_dir}
+```
+
+Submitted as **mcf7_macs_HMMRATAC_YMM.pbs**
+
+```{bash, echo = T, eval = F}
+# Calling non-multimapped filtered peaks with MACS3 HMMRATAC
+#PBS -l walltime=24:00:00
+#PBS -l select=1:ncpus=8:mem=64gb
+#PBS -J 1-4
+
+# Set working directory
+cd $PBS_0_WORKDIR
+
+# Load appropriate modules
+module load MACS3/3.0.1
+
+# Define the input and output directories
+input_dir="/rds/general/user/kmt23/ephemeral/data/SAM_ATAC/realigned/BAM_BAI/noM"
+output_dir="/rds/general/user/kmt23/ephemeral/data/SAM_ATAC/realigned/BAM_BAI/noM/mcf7_HMMRATAC_YMM"
+
+# Read the input file list
+list="/rds/general/user/kmt23/home/jobs/array_lists/mcf7_atac_YMM.txt"
+fq_1=$(awk -v taskID=${PBS_ARRAY_INDEX} '$1==taskID {print $2}' "${list}")
+fq_2=$(awk -v taskID=${PBS_ARRAY_INDEX} '$1==taskID {print $3}' "${list}")
+
+# Define the command
+macs3 hmmratac -i "${input_dir}/${fq_1}" -n ${fq_2} --outdir ${output_dir}
+```
+
+**OE:**
+
+-   i: input
+
+-   outdir: output directory
+
+-   n: name
+
+AS
+
+:   Alignment Sieve filtered (with ATACShift)
+
+NMM
+
+:   no multimapped reads
+
+YMM
+
+:   yes multimapped reads
+
+noM
+
+:   no mitochondrial reads
+
+#### THOR
+
+```{bash}
+# THOR
+#PBS -l walltime=24:00:00
+#PBS -l select=1:ncpus=8:mem=64gb
+
+# Load appropriate modules
+module load RGT/1.0.0 
+
+# Set working directory
+cd $PBS_0_WORKDIR
+
+rgt-THOR /rds/general/user/kmt23/home/jobs/RGT.config
+```
+
+RGT.config
+
+```{bash}
+#rep1
+/rds/general/user/kmt23/ephemeral/data/SAM_ATAC/realigned/BAM_BAI/noM/AlignmentSieve/sorted_sorted_1_0A5L_01JKMRC_BrCa-TREATED-1_ATAC_hs_i201_r1.fastq.sam_noM.bam_ASF.bam_noB.bam
+/rds/general/user/kmt23/ephemeral/data/SAM_ATAC/realigned/BAM_BAI/noM/AlignmentSieve/sorted_sorted_2_0A5M_01JKMRC_BrCa-TREATED-2_ATAC_hs_i202_r1.fastq.sam_noM.bam_ASF.bam_noB.bam
+#rep2
+/rds/general/user/kmt23/ephemeral/data/SAM_ATAC/realigned/BAM_BAI/noM/AlignmentSieve/sorted_sorted_3_0A5N_01JKMRC_BrCa-CONTROL-1_ATAC_hs_i203_r1.fastq.sam_noM.bam_ASF.bam_noB.bam
+/rds/general/user/kmt23/ephemeral/data/SAM_ATAC/realigned/BAM_BAI/noM/AlignmentSieve/sorted_sorted_4_0A5O_01JKMRC_BrCa-CONTROL-2_ATAC_hs_i204_r1.fastq.sam_noM.bam_ASF.bam_noB.bam
+#chrom_sizes
+/rds/general/user/kmt23/home/src/hg38.chrom.sizes
+```
+
+#### Genrich
+
+```{bash}
+
+# Calling non multimapped filtered peaks with GENRICH
+#PBS -l walltime=24:00:00
+#PBS -l select=1:ncpus=8:mem=48gb
+#PBS -J 1-4
+
+# Set working directory
+cd $PBS_0_WORKDIR
+
+# Load appropriate modules
+module load SAMTOOLS/1.19.2
+module load GENRICH/0.6.1
+module load BEDTOOLS/2.31.1
+# Define the input and output directories
+input_dir="/rds/general/user/kmt23/ephemeral/data/SAM_ATAC/realigned/BAM_BAI/noM"
+output_dir="/rds/general/user/kmt23/ephemeral/data/SAM_ATAC/realigned/BAM_BAI/noM/GENRICH"
+blacklist_file=/rds/general/user/kmt23/home/src/hg38/hg38chipblacklist/ENCFF356LFX.bed
+
+# Read the input file list
+list="/rds/general/user/kmt23/home/jobs/array_lists/mcf7_atac_YMM.txt"
+fq_1=$(awk -v taskID=${PBS_ARRAY_INDEX} '$1==taskID {print $2}' "${list}")
+
+bedtools intersect -v -abam "${input_dir}/${fq_1}" -b "${blacklist_file}" > "${input_dir}/${fq_1}_noB.bam"
+samtools sort -n "${input_dir}/${fq_1}_noB.bam" -o "${output_dir}/${fq_1}noB_nsorted.bam"
+Genrich -t "${output_dir}/${fq_1}noB_nsorted.bam" -o "${output_dir}/${fq_1%.fastq.sam_noM.bam}_nsorted.bam.narrowPeak" -j -d 100
+```
+
+#### MACS2
+
+```{bash}
+# Calling non multimapped filtered peaks with MACS2
+#PBS -l walltime=24:00:00
+#PBS -l select=1:ncpus=8:mem=48gb
+#PBS -J 1-4
+
+# Set working directory
+cd $PBS_0_WORKDIR
+
+# Load appropriate modules
+module load MACS2/2.2.9.1
+module load BEDTOOLS/2.31.1
+
+# Define the input and output directories
+input_dir="/rds/general/user/kmt23/ephemeral/data/MACS2rerun"
+output_dir="/rds/general/user/kmt23/ephemeral/data/MACS2reurn/MACS2C"
+blacklist_file=/rds/general/user/kmt23/home/src/hg38/hg38chipblacklist/ENCFF356LFX.bed
+
+# Read the input file list
+list="/rds/general/user/kmt23/home/jobs/array_lists/mcf7_atac_YMM_AS_HMMRATAC.txt"
+fq_1=$(awk -v taskID=${PBS_ARRAY_INDEX} '$1==taskID {print $2}' "${list}")
+
+macs2 callpeak -t ${input_dir}/${fq_1}_noB.bam --keep-dup all -B -q 0.01 --format BAM -g hs --outdir ${output_dir} -n "${fq_1%.fastq.sam_noM.bammultimapped_filtered_M.bam}_MACS_ATACSeq_NFR_Peaks"
+```
+
+# Hi-C
+
+### Quality Control
+
+```{bash}
+# FASTQC on hic files
+#PBS -l walltime=24:00:00
+#PBS -l select=1:ncpus=8:mem=32gb
+#PBS -J 1-8
+
+# Load appropriate modules
+module load FASTQC/0.12.1
+
+# Set working directory
+cd $PBS_0_WORKDIR
+
+input="/rds/general/user/kmt23/ephemeral/data/HIC/HiC_KT_SS"
+list="/rds/general/user/kmt23/home/jobs/array_lists/fastqchic.txt"
+fq_1=$(awk -v taskID=${PBS_ARRAY_INDEX} '$1==taskID {print $2}' ${list})
+
+fastqc ${input}/${fq_1} --outdir /rds/general/user/kmt23/ephemeral/data/HIC/HiC_KT_SS/FASTQC
+```
+
+The Hi-C pro manual was used as described in the methods section.
+
+#### Building a BowTie2 index
+
+```{bash}
+# align hg38 reference genome with bowtie2
+#PBS -l walltime=24:00:00
+#PBS -l select=1:ncpus=8:mem=32gb
+
+module load BOWTIE2/2.5.3
+
+# Set working directory
+cd $PBS_0_WORKDIR
+
+bowtie2-build -f /rds/general/user/kmt23/home/src/hg38/hg38bt3.fa /rds/general/user/kmt23/ephemeral/data/HIC/bt2
+```
+
+## Starting HiC-Pro
+
+```{bash}
+#PBS -l walltime=24:00:00
+#PBS -l select=1:ncpus=4:mem=32gb
+
+# Set working directory
+cd $PBS_0_WORKDIR
+
+
+/rds/general/user/kmt23/home/src/HiC-Pro/HiC-Pro_3.1.0/bin/HiC-Pro -i /rds/general/user/kmt23/ephemeral/data/HIC/HiC_KT_SS -o /rds/general/user/kmt23/ephemeral/data/HIC3 /rds/general/user/kmt23/home/src/HiC-Pro/HiC-Pro_3.1.0/config-hicpro.txt -p
+```
+
+## HiC-Pro Configuration
+
+```{bash}
+# Please change the variable settings below if necessary
+#########################################################################
+## Paths and Settings  - Do not edit !
+#########################################################################
+TMP_DIR = tmp
+LOGS_DIR = logs
+BOWTIE2_OUTPUT_DIR = bowtie_results
+MAPC_OUTPUT = hic_results
+RAW_DIR = rawdata
+#######################################################################
+## SYSTEM AND SCHEDULER - Start Editing Here !!
+#######################################################################
+N_CPU = 24
+SORT_RAM = 8000M
+LOGFILE = hicpro.log
+JOB_NAME = 
+JOB_MEM = 120gb
+JOB_WALLTIME = 72:00:00
+JOB_QUEUE = 
+JOB_MAIL = 
+#########################################################################
+## Data
+#########################################################################
+PAIR1_EXT = _R1
+PAIR2_EXT = _R2
+#######################################################################
+## Alignment options
+#######################################################################
+MIN_MAPQ = 0
+BOWTIE2_IDX_PATH = /rds/general/user/kmt23/ephemeral/data/HIC/hg38/GRCh38_noalt_as
+BOWTIE2_GLOBAL_OPTIONS = --sensitive -L 30 --score-min L,-0.6,-0.2 --end-to-end --reorder
+BOWTIE2_LOCAL_OPTIONS =  --sensitive -L 20 --score-min L,-0.6,-0.2 --end-to-end --reorder
+#######################################################################
+## Annotation files
+#######################################################################
+REFERENCE_GENOME = GRCh38_noalt_as
+GENOME_SIZE = hg38.chrom.sizes
+#######################################################################
+## Allele specific analysis
+#######################################################################
+ALLELE_SPECIFIC_SNP = 
+#######################################################################
+## Capture Hi-C analysis
+#######################################################################
+CAPTURE_TARGET =
+REPORT_CAPTURE_REPORTER = 1
+#######################################################################
+## Digestion Hi-C
+#######################################################################
+GENOME_FRAGMENT = /rds/general/user/kmt23/ephemeral/data/HIC/bt2/hg38_mboi.bed
+LIGATION_SITE = GATCGATC
+MIN_FRAG_SIZE = 100 
+MAX_FRAG_SIZE = 100000
+MIN_INSERT_SIZE = 
+MAX_INSERT_SIZE = 
+#######################################################################
+## Hi-C processing
+#######################################################################
+MIN_CIS_DIST =
+GET_ALL_INTERACTION_CLASSES = 1
+GET_PROCESS_SAM = 0
+RM_SINGLETON = 1
+RM_MULTI = 1
+RM_DUP = 1
+#######################################################################
+## Contact Maps
+#######################################################################
+BIN_SIZE = 10000 20000 40000 500000
+MATRIX_FORMAT = complete
+#######################################################################
+## Normalization
+#######################################################################
+MAX_ITER = 100
+FILTER_LOW_COUNT_PERC = 0.02
+FILTER_HIGH_COUNT_PERC = 0
+EPS = 0.1
+```
+
+## File converstion
+
+Hi-C to Juicebox
+
+```{bash}
+# hicpro_to_juicebox
+#PBS -l walltime=24:00:00
+#PBS -l select=1:ncpus=24:mem=120gb
+
+# Load appropriate modules
+
+# Set working directory
+cd $PBS_0_WORKDIR
+
+/rds/general/user/kmt23/home/src/may31hicpro/HiC-Pro-3.1.0/bin/utils/hicpro2juicebox.sh -i /rds/general/user/kmt23/ephemeral/data/HICJUN4/hic_results/data/WT/WT.allValidPairs -g /rds/general/user/kmt23/home/src/may31hicproinstall/HiC-Pro_3.1.0/annotation/hg38.chrom.sizes -j /rds/general/user/kmt23/home/src/juicer_tools_1.13.02.jar -r /rds/general/user/kmt23/ephemeral/data/HIC/bt2/hg38_mboi2.bed
+```
+
+Hi-C to H5
+
+```{bash}
+# hicpro_to_h5
+#PBS -l walltime=24:00:00
+#PBS -l select=1:ncpus=8:mem=96gb
+#PBS -J 1-2
+# Load appropriate modules
+module load HICEXPLORE/3.7.2
+
+# Set working directory
+cd $PBS_0_WORKDIR
+
+input="/rds/general/user/kmt23/ephemeral/data/HICJUN4/hic_results/matrix"
+list='/rds/general/user/kmt23/home/jobs/array_lists/hicexploreconvert.txt'
+fq_1=$(awk -v taskID=${PBS_ARRAY_INDEX} '$1==taskID {print $2}' ${list})
+fq_2=$(awk -v taskID=${PBS_ARRAY_INDEX} '$1==taskID {print $3}' ${list})
+inp=${input}/${fq_1}
+
+echo ${fq_1}
+
+hicConvertFormat -m ${fq_1} -o ${fq_1}.h5 --inputFormat hicpro --outputFormat h5 -bf ${fq_2}
+```
+
+Hi-C to Cool
+
+```{bash}
+#PBS -l walltime=24:00:00
+#PBS -l select=1:ncpus=8:mem=96gb
+#PBS -J 1-2
+# Load appropriate modules
+module load HICEXPLORE/3.7.2
+
+# Set working directory
+cd $PBS_0_WORKDIR
+
+input="/rds/general/user/kmt23/ephemeral/data/HICJUN4/hic_results/matrix"
+list='/rds/general/user/kmt23/home/jobs/array_lists/hicexploreconvert.txt'
+fq_1=$(awk -v taskID=${PBS_ARRAY_INDEX} '$1==taskID {print $2}' ${list})
+fq_2=$(awk -v taskID=${PBS_ARRAY_INDEX} '$1==taskID {print $3}' ${list})
+inp=${input}/${fq_1}
+
+echo ${fq_1}
+
+hicConvertFormat -m ${fq_1} -o ${fq_1}_cool --inputFormat hicpro --outputFormat cool -bf ${fq_2}
+```
+
+## Activity by Contact (ABC)
+
+### Preprocessing for ABC
+
+First, we had to merge replicates
+
+```{bash}
+# Merging files for ABC
+#PBS -l walltime=24:00:00
+#PBS -l select=1:ncpus=8:mem=32gb
+
+# Load appropriate modules
+module load SAMTOOLS/1.19.2
+
+# Set working directory
+cd $PBS_0_WORKDIR
+
+##ATAC
+#treated
+samtools merge -o /rds/general/user/kmt23/ephemeral/data/SAM_ATAC/ATAC/MCF7_ATAC_TR_merged.bam /rds/general/user/kmt23/ephemeral/data/SAM_ATAC/ATAC/sorted_sorted_1_0A5L_01JKMRC_BrCa-TREATED-1_ATAC_hs_i201_r1.fastq.sam_noM.bam_noB.bam /rds/general/user/kmt23/ephemeral/data/SAM_ATAC/ATAC/sorted_sorted_2_0A5M_01JKMRC_BrCa-TREATED-2_ATAC_hs_i202_r1.fastq.sam_noM.bam_noB.bam
+#untreated
+samtools merge -o /rds/general/user/kmt23/ephemeral/data/SAM_ATAC/ATAC/MCF7_ATAC_WT_merged.bam /rds/general/user/kmt23/ephemeral/data/SAM_ATAC/ATAC/sorted_sorted_3_0A5N_01JKMRC_BrCa-CONTROL-1_ATAC_hs_i203_r1.fastq.sam_noM.bam_noB.bam /rds/general/user/kmt23/ephemeral/data/SAM_ATAC/ATAC/sorted_sorted_4_0A5O_01JKMRC_BrCa-CONTROL-2_ATAC_hs_i204_r1.fastq.sam_noM.bam_noB.bam
+
+##H3K27Ac
+#treated
+samtools merge -o /rds/general/user/kmt23/ephemeral/data/SAM_CHIP/MCF7_H3K27Ac_TR_merged.bam /rds/general/user/kmt23/ephemeral/data/SAM_CHIP/realigned/BAM_BAI/noB/11_0AVC_01JNMRC_TREATED-5_H3K27Ac_hs_i95_noM.bam /rds/general/user/kmt23/ephemeral/data/SAM_CHIP/realigned/BAM_BAI/noB/12_0AVD_01JNMRC_TREATED-6_H3K27Ac_hs_i96_noM.bam
+#untreated
+samtools merge -o /rds/general/user/kmt23/ephemeral/data/SAM_CHIP/MCF7_H3K27Ac_WT_merged.bam /rds/general/user/kmt23/ephemeral/data/SAM_CHIP/realigned/BAM_BAI/noB/09_0AVA_01JNMRC_CONTROL-5_H3K27Ac_hs_i86_noM.bam /rds/general/user/kmt23/ephemeral/data/SAM_CHIP/realigned/BAM_BAI/noB/10_0AVB_01JNMRC_CONTROL-6_H3K27Ac_hs_i94_noM.bam
+
+echo "Merge complete!"
+```
+
+First we had to create the TagAlign Files
+
+```{bash}
+# Merging files for ABC
+#PBS -l walltime=24:00:00
+#PBS -l select=1:ncpus=8:mem=32gb
+
+# Load appropriate modules
+module load SAMTOOLS/1.19.2
+module load BEDTOOLS/2.31.1
+
+bedtools bamtobed -i /rds/general/user/kmt23/ephemeral/data/SAM_ATAC/ATAC/MCF7_ATAC_TR_merged.bam | awk 'BEGIN{OFS="\t"}{$4="N";$5="1000";print $0}' | gzip -c > /rds/general/user/kmt23/ephemeral/data/SAM_ATAC/ATAC/MCF7_ATAC_TR_merged.tagAlign.gz
+bedtools bamtobed -i /rds/general/user/kmt23/ephemeral/data/SAM_ATAC/ATAC/MCF7_ATAC_WT_merged.bam | awk 'BEGIN{OFS="\t"}{$4="N";$5="1000";print $0}' | gzip -c > /rds/general/user/kmt23/ephemeral/data/SAM_ATAC/ATAC/MCF7_ATAC_WT_merged.tagAlign.gz
+```
+
+Then we had to go back to the bed files and create the bgzipped reference files
+
+```{bash}
+# Merging files for ABC
+#PBS -l walltime=24:00:00
+#PBS -l select=1:ncpus=8:mem=64gb
+
+# Load appropriate modules
+module load SAMTOOLS/1.19.2
+module load BEDTOOLS/2.31.1
+
+bedtools bamtobed -i /rds/general/user/kmt23/ephemeral/data/SAM_ATAC/ATAC/MCF7_ATAC_TR_merged.bam > /rds/general/user/kmt23/ephemeral/data/SAM_ATAC/ATAC/MCF7_ATAC_TR_merged.bed 
+bedtools bamtobed -i /rds/general/user/kmt23/ephemeral/data/SAM_ATAC/ATAC/MCF7_ATAC_WT_merged.bam > /rds/general/user/kmt23/ephemeral/data/SAM_ATAC/ATAC/MCF7_ATAC_WT_merged.bed
+
+bedtools sort -i /rds/general/user/kmt23/ephemeral/data/SAM_ATAC/ATAC/MCF7_ATAC_TR_merged.bed
+bedtools sort -i /rds/general/user/kmt23/ephemeral/data/SAM_ATAC/ATAC/MCF7_ATAC_WT_merged.bed
+```
+
+```{bash, eval = F}
+# Merging files for ABC
+#PBS -l walltime=24:00:00
+#PBS -l select=1:ncpus=8:mem=64gb
+
+# Load appropriate modules
+module load SAMTOOLS/1.19.2
+module load BEDTOOLS/2.31.1
+
+bedtools sort -i /rds/general/user/kmt23/ephemeral/data/SAM_ATAC/ATAC/MCF7_ATAC_TR_merged.bed
+bedtools sort -i /rds/general/user/kmt23/ephemeral/data/SAM_ATAC/ATAC/MCF7_ATAC_TR_merged.bed
+```
+
+I had to do a special zip function for the merged tagAlign file
+
+```{bash}
+# Merging files for ABC
+#PBS -l walltime=24:00:00
+#PBS -l select=1:ncpus=8:mem=64gb
+
+# Set working directory
+cd $PBS_0_WORKDIR
+
+# Load appropriate modules
+module load SAMTOOLS/1.19.2
+module load HTSLIB/1.9
+
+bgzip -c -i /rds/general/user/kmt23/ephemeral/data/SAM_ATAC/ATAC/MCF7_ATAC_WT_merged.tagAlign
+```
+
+### Config file
+
+```{bash}
+biosample	DHS	ATAC	H3K27ac	default_accessibility_feature	HiC_file	HiC_type	HiC_resolution	alt_TSS	alt_genes
+MCF7_TR		/rds/general/user/kmt23/ephemeral/data/SAM_ATAC/ATAC/MCF7_ATAC_TR_merged.tagAlign.bgz	/rds/general/user/kmt23/ephemeral/data/SAM_CHIP/MCF7_H3K27Ac_TR_merged.bam	ATAC	/rds/general/user/kmt23/home/TR.allValidPairs.hic	hic	5000
+```
+
+### Final script
+
+```{bash, eval = F}
+# Merging files for ABC
+#PBS -l walltime=24:00:00
+#PBS -l select=1:ncpus=8:mem=64gb
+
+# Load appropriate modules
+module load ABC/1.1.2
+
+cd /rds/general/user/kmt23/home/src/ABC-Enhancer-Gene-Prediction/
+
+snakemake -j1
+```

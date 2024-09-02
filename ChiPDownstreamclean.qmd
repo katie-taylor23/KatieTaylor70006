@@ -1,0 +1,1220 @@
+---
+title: "MCF7 ChIP Downstream Analysis"
+format: html
+editor: visual
+---
+
+## Quality Control
+
+We started. with quality analysis with our ChIP data with the package ChIPQC. This does not work, so we are not going to use it further on downstream.
+
+```{r, eval = F}
+library(ChIPQC)
+library(TxDb.Hsapiens.UCSC.hg38.knownGene)
+## Load sample data
+samples_real <- read.csv('/Users/katietaylor/70006/CHIP_mcf7/realignedoutput/ChIPQC_meta_simple.csv', header = TRUE)
+index_files_dir <- "/Users/katietaylor/70006/CHIP_mcf7/realignedoutput/noB"
+print(samples_real)
+
+register(SerialParam())
+samples_r <- samples_real[,1]
+#samples_r <- (unlist(my_list))
+experiment_real <- ChIPQC(samples_real, annotation = "hg38")
+print(experiment_real)
+ChIPQCreport(experiment_H3K4Me3,facetBy=F)
+saveRDS(experiment_real, file = "/Users/katietaylor/70006/CHIP_mcf7/ChipQC.rds")
+
+```
+
+## ChipPeakAnno
+
+We want to annotate our peaks and figure out where our peaks are, so we are going to annotate with ChipPeakAnno.
+
+We start with loading the required libraries.
+
+```{r}
+library("ChIPpeakAnno")
+# creating a GRanges object
+library("GenomicRanges")
+library("rtracklayer")
+#Entrez IDs
+library("org.Hs.eg.db")
+#Ensembl IDs
+library("EnsDb.Hsapiens.v86")
+```
+
+First, we are going to set the `narrow_files` directory, so that we can access files in that directory. We then can define the conditions and corresponding prefixes. We also set up the annotation data.
+
+```{r}
+peak_dir <- "/Users/katietaylor/70006/CHIP_mcf7/realignedoutput/noB/noDup/Peaks"
+narrow_files <- list.files(path = peak_dir, pattern = "*peaks.narrowPeak", full.names = TRUE)
+export_dir <- "/Users/katietaylor/70006/CHIP_mcf7/realignedoutput"
+# Define conditions and corresponding prefixes
+conditions <- c("H3K4Me3 Control 1", "H3K4Me3 Control 2", "H3K4Me3 Treated 1", "H3K4Me3 Treated 2",
+                "H3K4Me1 Control 1", "H3K4Me1 Control 2", "H3K4Me1 Treated 1", "H3K4Me1 Treated 2",
+                "H3K27Ac Control 1", "H3K27Ac Control 2", "H3K27Ac Treated 1", "H3K27Ac Treated 2")
+prefixes <- c("Me3C1", "Me3C2", "Me3T1", "Me3T2", 
+              "Me1C1", "Me1C2", "Me1T1", "Me1T2",
+              "AcC1", "AcC2", "AcT1", "AcT2")
+annoData <- toGRanges(EnsDb.Hsapiens.v86, feature="gene")
+annoData[1:2]
+```
+
+### Annotations
+
+We can then loop through narrowPeak files and make corresponding GRanges objects, saved to `export_dir`
+
+```{r, eval = F}
+for (i in seq_along(conditions)) {
+  # Extract condition name and prefix
+  condition <- conditions[i]
+  prefix <- prefixes[i]
+  file_index <- i  
+
+  sampl_name <- sub("_peaks.narrowPeak$", "", basename(narrow_files[file_index]))
+  print(sampl_name)
+  
+  # Create GRanges object
+  gr <- toGRanges(narrow_files[file_index], format = "narrowPeak")
+  
+  # Write GRanges object to file
+  gr_output_file <- paste0(export_dir, "gr2_", prefix, ".rds")
+  saveRDS(gr, file = gr_output_file)
+  cat("GRanges object written to:", gr_output_file, "\n")
+  
+  # Annotate peaks
+  anno.gr <- annotatePeakInBatch(gr, AnnotationData = annoData)
+  
+  # Make the names unique
+  names(anno.gr) <- make.names(seqnames(anno.gr), unique = TRUE)
+  
+  # Convert to data frame
+  anno_df <- as.data.frame(anno.gr)
+  
+  # Write annotated data to file
+  anno_output_file <- paste0(export_dir, "annotated_data2_", prefix, ".csv")
+  write.csv(anno_df, file = anno_output_file, row.names = FALSE)
+  cat("Annotated data written to:", anno_output_file, "\n")
+  
+  # Create pie chart
+  pie_output_file <- paste0(export_dir, "pie_chart2_", prefix, ".png")
+  png(pie_output_file)
+  pie1(table(anno_df$insideFeature), main = paste(condition, "- Peak Locations"), col = c("#85C1E9", "#F9EBEA", "#EAF2F8", "#E59866", "#A9DFBF", "#CD5C5C"))
+  dev.off()
+  cat("Pie chart written to:", pie_output_file, "\n")
+}
+AcT2 <- readRDS("/Users/katietaylor/70006/CHIP_mcf7/realignedoutputgr2_AcT2.rds")
+AcT1 <- readRDS("/Users/katietaylor/70006/CHIP_mcf7/realignedoutputgr2_AcT1.rds")
+AcC1 <- readRDS("/Users/katietaylor/70006/CHIP_mcf7/realignedoutputgr2_AcC1.rds")
+AcC2 <- readRDS("/Users/katietaylor/70006/CHIP_mcf7/realignedoutputgr2_AcC2.rds")
+
+Me3T1 <- readRDS("/Users/katietaylor/70006/CHIP_mcf7/realignedoutputgr2_Me3T1.rds")
+Me3T2 <- readRDS("/Users/katietaylor/70006/CHIP_mcf7/realignedoutputgr2_Me3T2.rds")
+Me3C1 <- readRDS("/Users/katietaylor/70006/CHIP_mcf7/realignedoutputgr2_Me3C1.rds")
+Me3C2 <- readRDS("/Users/katietaylor/70006/CHIP_mcf7/realignedoutputgr2_Me3C2.rds")
+
+Me1T1 <- readRDS("/Users/katietaylor/70006/CHIP_mcf7/realignedoutputgr2_Me1T1.rds")
+Me1T2 <- readRDS("/Users/katietaylor/70006/CHIP_mcf7/realignedoutputgr2_Me1T2.rds")
+Me1C1 <- readRDS("/Users/katietaylor/70006/CHIP_mcf7/realignedoutputgr2_Me1C1.rds")
+Me1C2 <- readRDS("/Users/katietaylor/70006/CHIP_mcf7/realignedoutputgr2_Me1C2.rds")
+gr_peaks <- GRangesList(H3K27Ac_Treated2 = AcT2, H3K27Ac_Treated_1 = AcT1, H3K27Ac_Control_1 = AcC1, H3K27Ac_Control_2 = AcC2, H34Me3Ac_Treated1 = Me3T1, H3K4Me3_Treated2 = Me3T2, H3K4Me3_Control1 = Me3C1, H3K4Me3_Control2 = Me3C2, H3K4Me1_Treated1 = Me1T1, H3K4Me1_Treated2 = Me1T2, H3K4Me1_Control1 = Me1C1, H3K4Me1_Control2 = Me1C2)
+gr_peaks <- GRangesList(H3K27Me1 = chip_seq_anno_list[[1]],
+                        H3K4Me3 = chip_seq_anno_list[[2]],
+                        H3K27Ac = chip_seq_anno_list[[3]])
+genomicElementDistribution(gr_peaks, 
+                           TxDb = TxDb.Hsapiens.UCSC.hg38.knownGene,
+                           labelColors = c(promoter = "#1F618D", geneDownstream = "#B03A2E", geneBody = "#FADBD8",
+    distalIntergenic = "#EBF5FB", exon = "#F2D7D5", intron = "#C0392B", intergenic =
+    "#D98880", utr5 = "#85929E", utr3 = "#34495E", CDS = "#D6DBDF", otherExon =
+    "#1B2631"))
+
+
+```
+
+```{r, eval = F}
+#011959", "#205F61", "#497451", "#114360", "#637E44" , "#0D315D", "#326B5C", "#165162","#0F3B5F", "#1A5862", "#3D7056",
+                                  "#134A61", "#08255B", "#56794A", "#28655F", "#1D5C62", "#051F5A", "#124761", "#386D59", "#5C7B47", "#185562", "#246261",
+                                  "#4F774D", "#2D685E",
+                                  "#E9AC88", "#7E8737", "#E7AB84", "#FED1CD", "#BF9D46", "#9E9233", "#FFEAEA", "#F5B7A6", "#D7A564", "#FFF5F5", "#FFDFDD",
+                                  "#FAC3BA", "#70823D", "#EEB094", "#E0A874", "#8E8D33", "#AF9839", "#CBA154", "#EBAD8B", "#FFE5E4", "#B79B3F", "#A79535",
+                                  "#DBA76D", "#F8BDAF", "#FFF0F0"
+```
+
+### Overlapping peaks
+
+I now want to find overlaps of peaks in all of my biological replicates, so that I can make some Venn diagrams.
+
+```{r}
+gr2_AcC1 <- readRDS(paste0(export_dir, "gr2_AcC1.rds"))
+gr2_AcC2 <- readRDS(paste0(export_dir, "gr2_AcC2.rds"))
+
+group_labels <- c("H3K27Ac Control 1", "H3K27Ac Control 2")
+
+
+overlapsAc <- findOverlapsOfPeaks(gr2_AcC1, gr2_AcC2)
+vennAcC <- makeVennDiagram(overlapsAc, totalTest = 100,
+                           fill = c("#85C1E9", "#CD5C5C"),
+                           col = c("#85C1E9", "#CD5C5C"),
+                           category = group_labels,
+                           cat.col = c("#85C1E9", "#CD5C5C"), 
+                           main = "Overlapping peaks in H3K27Ac Controls", 
+                           main.cex = 1.5, 
+                           cat.dist = 0.1,
+                           margin = 0.55, 
+                           main.pos = c(0.5, 0.75))
+
+gr2_Me1C1 <- readRDS(paste0(export_dir, "gr2_Me1C1.rds"))
+gr2_Me1C2 <- readRDS(paste0(export_dir, "gr2_Me1C2.rds"))
+
+group_labels2 <- c("H3K4Me1 Control 1", "H3K4Me1 Control 2")
+
+overlapsMe1 <- findOverlapsOfPeaks(gr2_Me1C1, gr2_Me1C2)
+vennMe1C <- makeVennDiagram(overlapsMe1, totalTest = 100,
+                            fill = c("#85C1E9", "#CD5C5C"),
+                            col = c("#85C1E9", "#CD5C5C"),
+                            category = group_labels2,
+                            cat.col = c("#85C1E9", "#CD5C5C"), main = "Overlapping peaks in H3K4Me1 Controls", 
+                            main.cex = 1.5, 
+                            cat.dist = 0.1,
+                            margin = 0.55, 
+                            main.pos = c(0.5, 0.75))
+
+gr2_Me3C1 <- readRDS(paste0(export_dir, "gr2_Me3C1.rds"))
+gr2_Me3C2 <- readRDS(paste0(export_dir, "gr2_Me3C2.rds"))
+
+group_labels3 <- c("H3K4Me3 Control 1", "H3K4Me3 Control 2")
+
+overlapsMe3 <- findOverlapsOfPeaks(gr2_Me3C1, gr2_Me3C2)
+vennMe3C <- makeVennDiagram(overlapsMe3, totalTest = 100,
+                            fill = c("#85C1E9", "#CD5C5C"),
+                            col = c("#85C1E9", "#CD5C5C"),
+                            category = group_labels3,
+                            cat.col = c("#85C1E9", "#CD5C5C"), main = "Overlapping peaks in H3K4Me3 Controls", 
+                            main.cex = 1.5, 
+                            cat.dist = 0.1,
+                            margin = 0.55, 
+                            main.pos = c(0.5, 0.75))
+
+gr2_AcT1 <- readRDS(paste0(export_dir, "gr2_AcT1.rds"))
+gr2_AcT2 <- readRDS(paste0(export_dir, "gr2_AcT2.rds"))
+
+group_labels4 <- c("H3K27Ac Treated 1", "H3K27Ac Treated 2")
+
+
+overlapsAcT <- findOverlapsOfPeaks(gr2_AcT1, gr2_AcT2)
+vennAcT <- makeVennDiagram(overlapsAcT, totalTest = 100,
+                           fill = c("#85C1E9", "#CD5C5C"),
+                           col = c("#85C1E9", "#CD5C5C"),
+                           category = group_labels4,
+                           cat.col = c("#85C1E9", "#CD5C5C"), 
+                           main = "Overlapping peaks in H3K27Ac Treated", 
+                           main.cex = 1.5, 
+                           cat.dist = 0.1,
+                           margin = 0.55, 
+                           main.pos = c(0.5, 0.75))
+
+gr2_Me1T1 <- readRDS(paste0(export_dir, "gr2_Me1T1.rds"))
+gr2_Me1T2 <- readRDS(paste0(export_dir, "gr2_Me1T2.rds"))
+
+group_labels5 <- c("H3K4Me1 Treated 1", "H3K4Me1 Treated 2")
+
+overlapsMe1T <- findOverlapsOfPeaks(gr2_Me1T1, gr2_Me1T2)
+vennMe1T <- makeVennDiagram(overlapsMe1T, totalTest = 100,
+                            fill = c("#85C1E9", "#CD5C5C"),
+                            col = c("#85C1E9", "#CD5C5C"),
+                            category = group_labels5,
+                            cat.col = c("#85C1E9", "#CD5C5C"), main = "Overlapping peaks in H3K4Me1 Treated", 
+                            main.cex = 1.5, 
+                            cat.dist = 0.1,
+                            margin = 0.55, 
+                            main.pos = c(0.5, 0.75))
+
+gr2_Me3T1 <- readRDS(paste0(export_dir, "gr2_Me3T1.rds"))
+gr2_Me3T2 <- readRDS(paste0(export_dir, "gr2_Me3T2.rds"))
+
+group_labels6 <- c("H3K4Me3 Treated 1", "H3K4Me3 Treated 2")
+
+overlapsMe3T <- findOverlapsOfPeaks(gr2_Me3T1, gr2_Me3T2)
+vennMe3T <- makeVennDiagram(overlapsMe3T, totalTest = 100,
+                            fill = c("#85C1E9", "#CD5C5C"),
+                            col = c("#85C1E9", "#CD5C5C"),
+                            category = group_labels6,
+                            cat.col = c("#85C1E9", "#CD5C5C"), main = "Overlapping peaks in H3K4Me3 Treated", 
+                            main.cex = 1.5, 
+                            cat.dist = 0.1,
+                            margin = 0.55, 
+                            main.pos = c(0.5, 0.75))
+```
+
+## DiffBind
+
+#### File management
+
+In order to find differential binding, we first employ DiffBind, a package for differential binding of sequencing data (ChIP and ATAC). We also should set our directories
+
+```{r}
+library("DiffBind")
+samples_mcf7_r <- read.table('/Users/katietaylor/Downloads/mcf7_chip_june5.csv', sep=",", header=TRUE)
+dirc_r <- "/Users/katietaylor/70006/CHIP_mcf7/realignedoutput/"
+print(samples_mcf7_r)
+```
+
+We next should modify the paths to the .bam files and peak files, so that we can read the files in.
+
+```{r}
+#samples_mcf7_r$bamReads <- paste(dirc_r, samples_mcf7_r$bamReads, sep = "")
+#samples_mcf7_r$bamControl <- paste(dirc_r, samples_mcf7_r$bamControl, sep = "")
+#samples_mcf7_r$Peaks <- paste(dirc_r, samples_mcf7_r$Peaks, sep = "")
+print(samples_mcf7_r)
+```
+
+### H3K4me1
+
+We want to differentiate between control and treated for *each* of the histone marks, and we're not too concerned with how they are alike and different between themselves, so we filter for H3K4Me1
+
+```{r}
+library(dplyr)
+library(DESeq2)
+library(edgeR)
+chip_mcf7_H3K4Me1 <- samples_mcf7_r %>% 
+  dplyr::filter(Factor == "H3K4Me1")
+print(chip_mcf7_H3K4Me1)
+View(chip_mcf7_H3K4Me1)
+```
+
+We now will create a dba object, will provide counts, and
+
+```{r}
+# creating a dba object
+chip_mcf7_H3K4Me1_dba <- dba(sampleSheet=chip_mcf7_H3K4Me1, scoreCol = 5)
+# running dba.count
+chip_mcf7_H3K4Me1_dba$config$yieldSize <- 250000
+
+#this step takes a long time
+chip_mcf7_H3K4Me1_dba <- dba.count(chip_mcf7_H3K4Me1_dba, 
+                                   bUseSummarizeOverlaps = chip_mcf7_H3K4Me1_dba$config$yieldSize, 
+                                   bParallel = FALSE, 
+                                   summits = FALSE)
+# normalizing and contrasting
+chip_mcf7_H3K4Me1_dba <- dba.normalize(chip_mcf7_H3K4Me1_dba)
+chip_mcf7_H3K4Me1_dba <- dba.contrast(chip_mcf7_H3K4Me1_dba, reorderMeta=list(Treatment="control"), minMembers=2)
+contrast <- dba.contrast(chip_mcf7_H3K4Me1_dba, reorderMeta=list(Treatment="control"), minMembers=2)
+chip_mcf7_H3K4Me1_dba <- dba.contrast(chip_mcf7_H3K4Me1_dba, minMembers = 2)
+```
+
+We can now analyze and create a dba report.
+
+```{r}
+chip_mcf7_H3K4Me1_dba <- dba.analyze(chip_mcf7_H3K4Me1_dba,
+                             bGreylist=FALSE, 
+                             bParallel = FALSE)
+chip_mcf7_H3K4Me1_dba.DB <- dba.report(chip_mcf7_H3K4Me1_dba)
+dba.show(chip_mcf7_H3K4Me1_dba, bContrasts=TRUE)
+save(chip_mcf7_H3K4Me1_dba.DB, file = "/Users/katietaylor/Downloads/chip_mcf7_H3K4Me1_dba.DB.RData")
+anno.gr.H3K4Me1 <- annotatePeakInBatch(chip_mcf7_H3K4Me1_dba.DB, AnnotationData = annoData)
+# Make the names unique
+names(anno.gr.H3K4Me1) <- make.names(seqnames(anno.gr.H3K4Me1), unique = TRUE)
+  
+  # Convert to data frame
+anno_df_H3K4Me1 <- as.data.frame(anno.gr.H3K4Me1)
+  
+  # Write annotated data to file
+write.csv(anno_df_H3K4Me1, file = "/Users/katietaylor/Downloads/anno_df_H3K4Me1_dif.csv", row.names = FALSE)
+```
+
+We now look at the contrasts and make sure that everything is okay.
+
+```{r}
+dba.show(chip_mcf7_H3K4Me1_dba, bContrasts=TRUE)
+```
+
+Now we can do some diagnostic plotting.
+
+#### Diagnostic plotting
+
+We first set up our color palette. We can see that the heatmap has some nice differentiation, so we move on to the PCA and the profile plot. The command dba.plotProfile is set up separately, because it takes a ton of time.
+
+```{r}
+profiles <- dba.plotProfile(chip_mcf7_H3K4Me1_dba)
+```
+
+```{r}
+myPalette <- colorRampPalette(c("#FDF2E9", "#46677d"))
+myRamp <- myPalette(100)
+#heatmap
+#dba.plotHeatmap(chip_mcf7_H3K4Me1_dba, contrast = 1, correlations = FALSE, #colScheme = myRamp, colSideCols = c("#FDF2E9", "#CD5C5C"))
+#dba.plotPCA(chip_mcf7_H3K4Me1_dba, contrast = 1, vColors = c("#85C1E9", "#CD5C5C"#), labelSize = 0.8)
+#dba.plotBox(chip_mcf7_H3K4Me1_dba, contrast = 1, vColors = c("#85C1E9", "#CD5C5C"#))
+sortedheatmap <- c("H3K4Me1_control", "H3K4Me1_treated")
+
+report_df_Me1 <- as.data.frame(chip_mcf7_H3K4Me1_dba.DB)
+
+gained_peaks <- report_df_Me1 %>% dplyr::filter(Fold > 0)
+lost_peaks <- report_df_Me1 %>% dplyr::filter(Fold < 0)
+
+dba.plotProfile(profiles)
+dba.plotProfile(profiles, 
+                matrices_color = c("#175362", "#FFFEFE", "#FAC3BA"), 
+                group_anno_color = c("#5C7B47"))
+```
+
+These plots aren't quite as pretty, because I can't change their colors without some serious work.
+
+```{r}
+dba.plotMA(chip_mcf7_dba, contrast = 1, bXY=TRUE)
+dba.plotVolcano(chip_mcf7_H3K4Me1_dba)
+
+
+
+View(chip_mcf7_H3K4Me1_dba.DB)
+
+anno_df_H3K4Me1 <- anno_df_H3K4Me1 %>%
+  mutate(log)
+
+anno_df
+
+
+plot(anno_df_H3K4Me1$Fold, anno_df_H3K4Me1$p.value, 
+     xlab = "log2 Fold Change (logFC)", 
+     ylab = "-log10(pvalue)",
+     main = "MCFRNA-Seq Volcano Plot",
+     pch = 20,  # Use solid points
+     col = ifelse(res$padj < 0.05, "#175362", "#FAC3BA"))+
+abline(h = -log10(0.05), col = "#FAC3BA", lty = 2) 
+```
+
+### H3K4Me3
+
+We want to differentiate between control and treated for *each* of the histone marks, and we're not too concerned with how they are alike and different between themselves, so we filter for H3K4Me3
+
+```{r}
+library(dplyr)
+chip_mcf7_H3K4Me3 <- samples_mcf7_r %>% 
+  dplyr::filter(Factor == "H3K4Me3")
+print(chip_mcf7_H3K4Me3)
+```
+
+We now will create a dba object, will provide counts, and
+
+```{r}
+# creating a dba object
+chip_mcf7_H3K4Me3_dba <- dba(sampleSheet=chip_mcf7_H3K4Me3, scoreCol = 5)
+# running dba.count
+chip_mcf7_H3K4Me3_dba$config$yieldSize <- 250000
+
+#this step takes a long time
+chip_mcf7_H3K4Me3_dba <- dba.count(chip_mcf7_H3K4Me3_dba, 
+                                   bUseSummarizeOverlaps = FALSE, 
+                                   bParallel = FALSE, 
+                                   summits = 1500)
+# normalizing and contrasting
+chip_mcf7_H3K4Me3_dba <- dba.normalize(chip_mcf7_H3K4Me3_dba)
+chip_mcf7_H3K4Me3_dba <- dba.contrast(chip_mcf7_H3K4Me3_dba, design = ~Treatment,
+                                      reorderMeta=list(Treatment="control"), minMembers=2)
+chip_mcf7_H3K4Me3_dba <- dba.contrast(chip_mcf7_H3K4Me3_dba, minMembers = 2)
+```
+
+We can now analyze and create a dba report.
+
+```{r}
+chip_mcf7_H3K4Me3_dba <- dba.analyze(chip_mcf7_H3K4Me3_dba, 
+                             design = ~Treatment,
+                             bGreylist=FALSE, 
+                             bParallel = FALSE)
+chip_mcf7_H3K4Me3_dba.DB <- dba.report(chip_mcf7_H3K4Me3_dba)
+save(chip_mcf7_H3K4Me3_dba.DB, file = "/Users/katietaylor/Downloads/chip_mcf7_H3K4Me3_dba.DB.RData")
+
+anno.gr.H3K4Me3 <- annotatePeakInBatch(chip_mcf7_H3K4Me3_dba.DB, AnnotationData = annoData)
+# Make the names unique
+names(anno.gr.H3K4Me3) <- make.names(seqnames(anno.gr.H3K4Me3), unique = TRUE)
+  
+  # Convert to data frame
+anno_df_H3K4Me3 <- as.data.frame(anno.gr.H3K4Me3)
+  
+  # Write annotated data to file
+write.csv(anno_df_H3K4Me3, file = "anno_df_H3K4Me3_dif.csv", row.names = FALSE)
+```
+
+We now look at the contrasts and make sure that everything is okay.
+
+```{r}
+dba.show(chip_mcf7_H3K4Me3_dba, bContrasts=TRUE)
+```
+
+#### Diagnostic plotting
+
+We first set up our color palette. We can see that the heatmap has some nice differentiation, so we move on to the PCA and the profile plot. The command dba.plotProfile is set up separately, because it takes a ton of time.
+
+```{r}
+profiles <- dba.plotProfile(chip_mcf7_H3K4Me3_dba)
+```
+
+```{r}
+myPalette <- colorRampPalette(c("#FDF2E9", "#46677d"))
+myRamp <- myPalette(100)
+#heatmap
+dba.plotHeatmap(chip_mcf7_H3K4Me3_dba, contrast = 1, correlations = FALSE, colScheme = myRamp, colSideCols = c("#FDF2E9", "#CD5C5C"))
+dba.plotPCA(chip_mcf7_H3K4Me3_dba, contrast = 1, vColors = c("#85C1E9", "#CD5C5C"), labelSize = 0.8)
+dba.plotBox(chip_mcf7_H3K4Me3_dba, contrast = 1, vColors = c("#85C1E9", "#CD5C5C"))
+#sortedheatmap <- c("H3K4Me3_control", "H3K4Me3_treated", "H3K27Ac_control", "H3K27Ac_treated", "H3K4Me1_control", "H3K4Me1_treated")
+dba.plotProfile(profiles, 
+                matrices_color = c("#FFE5E4", "#FFFEFE", "#1A5862"), 
+                group_anno_color = c("#5C7B47", "#BF9D46"))
+
+report_df <- as.data.frame(chip_mcf7_H3K4Me3_dba.DB)
+
+gained_peaks <- report_df %>% dplyr::filter(Fold > 0)
+lost_peaks <- report_df %>% dplyr::filter(Fold < 0)
+```
+
+These plots aren't quite as pretty, because I can't change their colors without some serious work.
+
+```{r}
+dba.plotMA(chip_mcf7_dba, contrast = 1, bXY=TRUE)
+dba.plotVolcano(chip_mcf7_dba)
+
+View(chip_mcf7_dba)
+
+```
+
+### H3K27Ac
+
+We want to differentiate between control and treated for *each* of the histone marks, and we're not too concerned with how they are alike and different between themselves, so we filter for H3K27Ac.
+
+```{r}
+library(dplyr)
+chip_mcf7_H3K27Ac <- samples_mcf7_r %>% 
+  dplyr::filter(Factor == "H3K27Ac")
+print(chip_mcf7_H3K27Ac)
+```
+
+We now will create a dba object, will provide counts, and
+
+```{r}
+# creating a dba object
+chip_mcf7_H3K27Ac_dba <- dba(sampleSheet=chip_mcf7_H3K27Ac, scoreCol = 5)
+# running dba.count
+chip_mcf7_H3K27Ac_dba$config$yieldSize <- 250000
+
+#this step takes a long time
+chip_mcf7_H3K27Ac_dba <- dba.count(chip_mcf7_H3K27Ac_dba, 
+                                   bUseSummarizeOverlaps = FALSE, 
+                                   bParallel = FALSE, 
+                                   summits = 750)
+# normalizing and contrasting
+chip_mcf7_H3K27Ac_dba <- dba.normalize(chip_mcf7_H3K27Ac_dba)
+chip_mcf7_H3K27Ac_dba <- dba.contrast(chip_mcf7_H3K27Ac_dba, design = ~Treatment,
+                                      reorderMeta=list(Treatment="control"), minMembers=2)
+# diffbind has some issues with two replicates, so this makes sure that it is okay with our two replicates per histone mark
+chip_mcf7_H3K27Ac_dba <- dba.contrast(chip_mcf7_H3K27Ac_dba, minMembers = 2)
+```
+
+We can now analyze and create a dba report.
+
+```{r}
+chip_mcf7_H3K27Ac_dba <- dba.analyze(chip_mcf7_H3K27Ac_dba, 
+                             design = ~Treatment,
+                             bGreylist=FALSE, 
+                             bParallel = FALSE)
+chip_mcf7_H3K27Ac_dba.DB <- dba.report(chip_mcf7_H3K27Ac_dba)
+save(chip_mcf7_H3K27Ac_dba.DB, file = "/Users/katietaylor/Downloads/chip_mcf7_H3K27Ac_dba.DB.RData")
+anno.gr.H3K27Ac <- annotatePeakInBatch(chip_mcf7_H3K27Ac_dba.DB, AnnotationData = annoData)
+# Make the names unique
+names(anno.gr.H3K27Ac) <- make.names(seqnames(anno.gr.H3K27Ac), unique = TRUE)
+  
+  # Convert to data frame
+anno_df_H3K27Ac <- as.data.frame(anno.gr.H3K27Ac)
+  
+  # Write annotated data to file
+write.csv(anno_df_H3K27Ac, file = "anno_df_H3K27Ac_dif.csv", row.names = FALSE)
+chip_mcf7_H3K4Me1 <- load(file = "/Users/katietaylor/Downloads/chip_mcf7_H3K4Me1_dba.DB.RData")
+print(chip_mcf7_H3K4Me1)
+load(file = "/Users/katietaylor/Downloads/chip_mcf7_H3K4Me3_dba.DB.RData")
+print(chip_mcf7_H3K4Me1)
+print(chip_mcf7_H3K4Me3_dba.DB)
+```
+
+We now look at the contrasts and make sure that everything is okay.
+
+```{r}
+dba.show(chip_mcf7_H3K27Ac_dba, bContrasts=TRUE)
+
+
+#Now we can do some diagnostic plotting.
+
+#### Diagnostic plotting
+
+#We first set up our color palette. We can see that the heatmap has some nice differentiation, so we move on to the PCA and the profile plot. The command dba.plotProfile is set up separately, because it takes a ton of time.
+
+profilesMe3 <- dba.plotProfile(chip_mcf7_H3K4Me3_dba)
+```
+
+#### Diagnostic plotting
+
+We first set up our color palette. We can see that the heatmap has some nice differentiation, so we move on to the PCA and the profile plot. The command dba.plotProfile is set up separately, because it takes a ton of time.
+
+```{r}
+profiles <- dba.plotProfile(chip_mcf7_H3K27Ac_dba)
+```
+
+```{r}
+myPalette <- colorRampPalette(c("#FDF2E9", "#46677d"))
+myRamp <- myPalette(100)
+#heatmap
+dba.plotHeatmap(chip_mcf7_H3K27Ac_dba, contrast = 1, correlations = FALSE, colScheme = myRamp, colSideCols = c("#FDF2E9", "#CD5C5C"))
+dba.plotPCA(chip_mcf7_H3K27Ac_dba, contrast = 1, vColors = c("#85C1E9", "#CD5C5C"), labelSize = 0.8)
+dba.plotBox(chip_mcf7_H3K27Ac_dba, contrast = 1, vColors = c("#85C1E9", "#CD5C5C"))
+#sortedheatmap <- c("H3K4Me3_control", "H3K4Me3_treated", "H3K27Ac_control", "H3K27Ac_treated", "H3K4Me1_control", "H3K4Me1_treated")
+dba.plotProfile(profiles, 
+                matrices_color = c("#FDF2E9", "#46677d", "#CD5C5C"), 
+                group_anno_color = c("#46677d", "#CD5C5C"), 
+                samples_to_sortby = sortedheatmap)
+```
+
+## ChipPeakAnno - differential peaks
+
+We first load all of the GRanges objects created by Diffbind
+
+```{r}
+load("/Users/katietaylor/Downloads/chip_mcf7_H3K4Me1_dba.DB.RData")
+load("/Users/katietaylor/Downloads/chip_mcf7_H3K4Me3_dba.DB.RData")
+load("/Users/katietaylor/Downloads/chip_mcf7_H3K27Ac_dba.DB.RData")
+```
+
+and load all of the appropriate packages
+
+### Plotting all 4 profile plots
+
+```{r}
+profiles27Ac <- dba.plotProfile(chip_mcf7_H3K27Ac_dba)
+profiles4Me3 <- dba.plotProfile(chip_mcf7_H3K4Me3_dba)
+profieles4Me1 <- dba.plotProfile(chip_mcf7_H3K4Me1_dba)
+profilesAtac <- dba.plotProfile(atac_mcf7_dba1)
+
+par(mfrow = c(1, 4))
+dba.plotProfile(profiles27Ac, matrices_color = c("#124E63", "#FFF0F0", "#F6A895"), 
+                group_anno_color = c("#124E63", "#F6A895"))
+dba.plotProfile(profiles4Me3, matrices_color = c("#124E63", "#FFF0F0", "#F6A895"), 
+                group_anno_color = c("#124E63", "#F6A895"))
+dba.plotProfile(profieles4Me1, matrices_color = c("#124E63", "#FFF0F0", "#F6A895"), 
+                group_anno_color = c("#124E63", "#F6A895"))
+dba.plotProfile(profilesAtac, matrices_color = c("#124E63", "#FFF0F0", "#F6A895"), 
+                group_anno_color = c("#124E63", "#F6A895"))
+par(mfrow = c(1, 1))
+
+batlow_palette <- scico::scico(n = 200, palette = "batlowK")
+batlow_palette2 <- colorRamp(colors = c("#124E63", "#E0A874"))
+
+dba.plotHeatmap(chip_mcf7_H3K27Ac_dba, correlation=TRUE, scale="row", colScheme = batlow_palette, colSideCols = c("#124E63", "#E0A874"))
+dba.plotHeatmap(chip_mcf7_H3K4Me3_dba, correlation=TRUE, scale="row", colScheme = batlow_palette, colSideCols = c("#124E63", "#E0A874"))
+dba.plotHeatmap(chip_mcf7_H3K4Me1_dba, correlation=TRUE, scale="row", colScheme = batlow_palette, colSideCols = c("#124E63", "#E0A874"))
+dba.plotHeatmap(atac_mcf7_dba1, correlation=TRUE, scale="row", colScheme = batlow_palette, colSideCols = c("#124E63", "#E0A874"))
+```
+
+```{r}
+# Load the DiffBind package
+library(DiffBind)
+
+# Assuming you have four DBA objects: dba1, dba2, dba3, dba4
+# Combine the DBA objects into one
+
+combined_dba <- dba.peakset(chip_mcf7_H3K27Ac_dba,peaks=chip_mcf7_H3K4Me3_dba)
+combined_dba <- dba.peakset(combined_dba,peaks=chip_mcf7_H3K4Me1_dba)
+combined_dba <- dba.peakset(combined_dba,peaks=atac_mcf7_dba1)
+
+combined_dba <- dba.peakset(profiles27Ac, peaks=profiles4Me3, minOverlap=1, mode=replicate)
+combined_dba <- dba.peakset(combined_dba, profieles4Me1, minOverlap=1, mode=DBA_MODE_SUM)
+combined_dba <- dba.peakset(combined_dba, peaks=profilesAtac, minOverlap=1, mode=DBA_MODE_SUM)
+
+# Optionally count reads if not already done
+combined_dba <- dba.count(combined_dba)
+
+# Plot the correlation heatmap
+dba.plotHeatmap(combined_dba, correlation=TRUE, scale="row")
+```
+
+#### Biomart
+
+I ended up actually downloading this file from the biomart server directly, because the server accession was not working
+
+```{r, eval = F}
+library(biomaRt)
+listEnsembl()
+ensembl <- useEnsembl(biomart = "regulation")
+listDatasets(ensembl)
+ensembl <- useDataset(dataset = "hsapiens_regulatory_feature", mart = ensembl)
+listFilters(ensembl)
+listAttributes(ensembl)
+enhancers <- getBM(attributes = c("chromosome_name", "chromosome_start", "chromosome_end", "feature_type_name", "epigenome_name", "activity"),
+      filters = 'regulatory_feature_type_name',
+      values = "Enhancer", 
+      mart = ensembl)
+```
+
+```{r}
+library("ChIPpeakAnno")
+library("GenomicRanges")
+library("rtracklayer")
+library("org.Hs.eg.db")
+library("EnsDb.Hsapiens.v86")
+annoData <- toGRanges(EnsDb.Hsapiens.v86, feature="gene")
+annoData <- toGRanges(data = "/Volumes/mydrive/70006/concatenated_filtered.sorted.merged.bed", format = "BED")
+#biomart
+#enhancers <- read.table("/Users/katietaylor/Downloads/ensembl_enhancers.txt", header = TRUE, sep = "\t")
+#annoData <- GRanges(seqnames = enhancers$Chromosome_scaffold.name,
+#                    ranges = IRanges(start = enhancers$Start_.bp., end = enhancers$End_.bp.))
+annoData[1:2]
+#enhancers_anno <- read.delim('/Users/katietaylor/Downloads/enhancers_unique.txt', header = TRUE)
+colnames(enhancers_anno) <- c("seqnames", "start", "end", "Feature_type", "Epigenome_name", "Activity", "tx_id")
+enhancers_df <- enhancers_anno[, c(1, 2, 3)]
+print(duplicated(colnames(enhancers_anno)))
+print(is.na(colnames(enhancers_anno)))
+annoData <- toGRanges(enhancers_anno, format = 'others')
+annoData <- toGRanges("/Volumes/mydrive/all_hg38lift.mnemonics.bedFiles/merged_output.bed", format = 'BED')
+```
+
+We now can annotate these GRanges objects in batches and make their names unique.
+
+```{r}
+chip_seq_anno_list <- list(chip_mcf7_H3K4Me1_dba.DB, chip_mcf7_H3K4Me3_dba.DB, chip_mcf7_H3K27Ac_dba.DB)
+annotated_list <- lapply(chip_seq_anno_list, function(anno) {
+  annotatePeakInBatch(anno, AnnotationData = annoData)
+})
+names(annotated_list[[1]]) <- make.names(seqnames(annotated_list[[1]]), unique = TRUE)
+names(annotated_list[[2]]) <- make.names(seqnames(annotated_list[[2]]), unique = TRUE)
+names(annotated_list[[3]]) <- make.names(seqnames(annotated_list[[3]]), unique = TRUE)
+
+gr_peaks <- GRangesList(H3K4Me1 = chip_seq_anno_list[[1]],
+                          H3K4Me3 = chip_seq_anno_list[[2]],
+                          H3K27Ac = chip_seq_anno_list[[3]])
+genomicElementDistribution(gr_peaks, 
+                           TxDb = TxDb.Hsapiens.UCSC.hg38.knownGene,
+                           labelColors = c(promoter = "#1F618D", geneDownstream = "#B03A2E", geneBody = "#FADBD8",
+    distalIntergenic = "#EBF5FB", exon = "#F2D7D5", intron = "#C0392B", intergenic =
+    "#D98880", utr5 = "#85929E", utr3 = "#34495E", CDS = "#D6DBDF", otherExon =
+    "#1B2631"))
+```
+
+We can save these to files to be used later in the knowledge graph.
+
+```{r}
+anno_df_H3K4Me1 <- as.data.frame(annotated_list[[1]])
+anno_df_H3K4Me3 <- as.data.frame(annotated_list[[2]])
+anno_df_H3K27Ac <- as.data.frame(annotated_list[[3]])
+
+```
+
+```{r}
+write.csv(anno_df_H3K4Me1, file = "/Users/katietaylor/70006/CHIP_mcf7/anno_df_H3K4Me1.csv", row.names = FALSE)
+write.csv(anno_df_H3K4Me3, file = "/Users/katietaylor/70006/CHIP_mcf7/anno_df_H3K4Me3.csv", row.names = FALSE)
+write.csv(anno_df_H3K27Ac, file = "/Users/katietaylor/70006/CHIP_mcf7/anno_df_H3K27Ac.csv", row.names = FALSE)
+```
+
+#### Enhancer annotations
+
+```{r}
+library(biomaRt)
+library(stringr)
+library(dplyr)
+library(tidyr)
+
+print(chip_mcf7_H3K4Me1_dba.DB)
+
+load("/Users/katietaylor/Downloads/chip_mcf7_H3K27Ac_dba.DB.RData")
+
+H3K27AC_df <- as.data.frame(chip_mcf7_H3K27Ac_dba.DB)
+
+print(H3K27AC_df)
+
+anno_df_histone <- anno_df_H3K27Ac
+print(anno_df_histone)
+
+anno_df_histone <- anno_df_histone %>%
+  mutate(seqnames = str_replace(seqnames, "chr", "")) %>%
+  mutate(seqnames = as.integer(seqnames))
+print(anno_df_histone)
+
+val <- c(anno_df_histone["seqnames"], anno_df_histone["start_position"], anno_df_histone["end_position"])
+
+# calling ensembl ID and using it to create a data frame with ncbi IDs
+ensembl <- useEnsembl(biomart = "regulation", dataset = "hsapiens_regulatory_feature", mirror = "www")
+
+ncbi_ID <- getBM(attributes = c("chromosome_name", "chromosome_start", "chromosome_end", "regulatory_stable_id"),
+      filters = c("chromosome_name", "start", "end"), 
+      values = list(anno_df_histone$seqnames, anno_df_histone$start_position, anno_df_histone$end_position), 
+      mart = ensembl)
+print(ncbi_ID)
+
+
+#annotated_peaks <- merge(anno_df_histone, ncbi_ID, by.x=c('seqnames', 'start', 'end'), by.y=c('chromosome_name', #'start_position', 'end_position'))
+
+# creating a custom join
+custom_join <- function(left_df, right_df, range = 10) {
+    left_df <- left_df %>%
+        rowwise() %>%
+        mutate(matched = list(
+            right_df %>%
+                filter(seqnames == chromosome_name & 
+                       abs(start - chromosome_start) <= range &
+                       abs(end - chromosome_end) <= range)
+        )) %>%
+        unnest(matched)
+    return(left_df)
+}
+
+annotated_peaks <- custom_join(anno_df_histone, ncbi_ID, range = 50)
+
+print(annotated_peaks)
+
+result <- left_join(anno_df_histone, ncbi_ID, by = c("seqnames"="chromosome_name", "start_position"="chromosome_start", "end_position"="chromosome_end"))
+
+print(anno_df_histone)
+
+print(ncbi_ID)
+
+# calling gene names
+hgnc_ID <- getBM(attributes = c("ensembl_gene_id", "hgnc_symbol"),
+      filters = "ensembl_gene_id", 
+      values = ensembl_g_id, 
+      mart = ensembl)
+```
+
+## rGREAT
+
+As always, we start with loading the package.
+
+```{r}
+library(rGREAT)
+```
+
+We can then use lapply to perform GREAT analysis on our GRanges object list
+
+```{r}
+GREAT_list <- lapply(annotated_list, function(gr) great(gr, "GO:BP", "hg38"))
+```
+
+We then can create some cool plots with our GREAT output
+
+```{r}
+# H3K4Me1
+plotVolcano(GREAT_list[[1]])
+plotRegionGeneAssociations(GREAT_list[[1]])
+#shinyReport(GREAT_list[[1]])
+# H3K4Me3
+plotVolcano(GREAT_list[[2]])
+plotRegionGeneAssociations(GREAT_list[[2]])
+#shinyReport(GREAT_list[[2]])
+# H3K27Ac
+plotVolcano(GREAT_list[[3]])
+plotRegionGeneAssociations(GREAT_list[[3]])
+#shinyReport(GREAT_list[[3]])
+```
+
+We can then save our annotations to .csv files
+
+```{r}
+great_df_H3K4Me1 <- GREAT_list[[1]]@table
+great_df_H3K4Me3 <- GREAT_list[[2]]@table
+great_df_H3K27Ac <- GREAT_list[[3]]@table
+write.csv(great_df_H3K4Me1, file = "/Users/katietaylor/70006/CHIP_mcf7/great_df_H3K4Me1.csv", row.names = FALSE)
+write.csv(great_df_H3K4Me3, file = "/Users/katietaylor/70006/CHIP_mcf7/great_df_H3K4Me3.csv", row.names = FALSE)
+write.csv(great_df_H3K27Ac, file = "/Users/katietaylor/70006/CHIP_mcf7/great_df_H3K27Ac.csv", row.names = FALSE)
+```
+
+## rrvigo
+
+```{r}
+library("rrvgo")
+library("org.Hs.eg.db")
+library(dplyr)
+library(ggrepel)
+
+great_df_H3K27Ac <- read.csv("/Users/katietaylor/70006/CHIP_mcf7/great_df_H3K4Me3.csv")
+
+great_df_H3K27Ac <- great_df_H3K27Ac %>%
+  dplyr::filter(p_adjust < 0.05)
+#
+simMatrix <- calculateSimMatrix(great_df_H3K27Ac$id,
+                                orgdb="org.Hs.eg.db",
+                                ont="BP",
+                                method="Rel")
+
+ scores <- setNames(-log10(great_df_H3K27Ac$p_adjust),great_df_H3K27Ac$id)
+
+reducedTerms <- reduceSimMatrix(simMatrix,
+                                scores,
+                                threshold=0.95,
+                                orgdb="org.Hs.eg.db")
+
+heatmapPlot(simMatrix,
+            reducedTerms,
+            annotateParent=TRUE,
+            annotationLabel="parentTerm",
+            fontsize=4)
+scatterPlot(simMatrix, reducedTerms, labelSize = 2)
+
+#gg_scatter_plot <- ggplot_gtable(ggplot_build(scatter_plot))
+point_layer_index <- grep("GeomPoint", sapply(gg_scatter_plot$grobs, function(x) x$name))
+gg_scatter_plot$grobs[[point_layer_index]]$geom_params$colour <- "#B03A2E"
+gg_scatter_plot$grobs[[6]]$geom_params$colour <- "#1F618D"
+grid::grid.newpage()
+grid::grid.draw(gg_scatter_plot)
+
+treemapPlot(reducedTerms)
+print(reducedTerms)
+```
+
+```{r}
+View(chip_mcf7_H3K4Me3_dba.DB)
+chip_mcf7_H3K4Me3_df <- as.data.frame(chip_mcf7_H3K4Me3_dba.DB)
+chip_mcf7_H3K27Ac_df <- as.data.frame(chip_mcf7_H3K27Ac_dba.DB)
+chip_mcf7_H3K4Me1_df <- as.data.frame(chip_mcf7_H3K4Me1_dba.DB)
+
+ggplot(chip_mcf7_H3K4Me3_df, aes(x=width)) + 
+  geom_histogram(binwidth=20)
+ggplot(chip_mcf7_H3K27Ac_df, aes(x=width)) + 
+  geom_histogram(binwidth=20)
+ggplot(chip_mcf7_H3K4Me1_df, aes(x=width)) + 
+  geom_histogram(binwidth=20)
+```
+
+#### Testing whether H3K27Ac genomic distribution changes
+
+```{r}
+library(dplyr)
+H3K27Ac_treated1 <- as.data.frame(read.csv("/Users/katietaylor/70006/CHIP_mcf7/realignedoutputannotated_data2_AcT1.csv", header = TRUE))
+H3K27Ac_treated2 <- as.data.frame(read.csv("/Users/katietaylor/70006/CHIP_mcf7/realignedoutputannotated_data2_AcT2.csv", header = TRUE))
+H3K27Ac_control1 <- as.data.frame(read.csv("/Users/katietaylor/70006/CHIP_mcf7/realignedoutputannotated_data2_AcC1.csv", header = TRUE))
+H3K27Ac_control2 <- as.data.frame(read.csv("/Users/katietaylor/70006/CHIP_mcf7/realignedoutputannotated_data2_AcC2.csv", header = TRUE))
+H3K4Me1_treated1 <- as.data.frame(read.csv("/Users/katietaylor/70006/CHIP_mcf7/realignedoutputannotated_data2_Me1T1.csv", header = TRUE))
+H3K4Me1_treated2 <- as.data.frame(read.csv("/Users/katietaylor/70006/CHIP_mcf7/realignedoutputannotated_data2_Me1T2.csv", header = TRUE))
+H3K4Me1_control1 <- as.data.frame(read.csv("/Users/katietaylor/70006/CHIP_mcf7/realignedoutputannotated_data2_Me1C1.csv", header = TRUE))
+H3K4Me1_control2 <- as.data.frame(read.csv("/Users/katietaylor/70006/CHIP_mcf7/realignedoutputannotated_data2_Me1C2.csv", header = TRUE))
+H3K4Me3_treated1 <- as.data.frame(read.csv("/Users/katietaylor/70006/CHIP_mcf7/realignedoutputannotated_data2_Me3T1.csv", header = TRUE))
+H3K4Me3_treated2 <- as.data.frame(read.csv("/Users/katietaylor/70006/CHIP_mcf7/realignedoutputannotated_data2_Me3T2.csv", header = TRUE))
+H3K4Me3_control1 <- as.data.frame(read.csv("/Users/katietaylor/70006/CHIP_mcf7/realignedoutputannotated_data2_Me3C1.csv", header = TRUE))
+H3K4Me3_control2 <- as.data.frame(read.csv("/Users/katietaylor/70006/CHIP_mcf7/realignedoutputannotated_data2_Me3C2.csv", header = TRUE))
+H3K27Ac_diff <- as.data.frame(read.csv("/Users/katietaylor/70006/CHIP_mcf7/anno_df_H3K27Ac.csv", header = TRUE))
+H3K4Me1_diff <- as.data.frame(read.csv("/Users/katietaylor/70006/CHIP_mcf7/anno_df_H3K4Me1.csv", header = TRUE))
+H3K4Me3_diff <- as.data.frame(read.csv("/Users/katietaylor/70006/CHIP_mcf7/anno_df_H3K4Me3.csv", header = TRUE))
+samples <- c(Treated1, Treated2, Control1, Control2)
+samples_abs <- abs(samples)
+
+samplesMe1 <- c(H3K4Me1_treated1[['distancetoFeature']], H3K4Me1_treated2[['distancetoFeature']], H3K4Me1_control1[['distancetoFeature']], H3K4Me1_control2[['distancetoFeature']]) 
+samplesMe1_abs <- abs(samplesMe1)
+
+samplesMe3 <- c(H3K4Me3_treated1[['distancetoFeature']], H3K4Me3_treated2[['distancetoFeature']], H3K4Me3_control1[['distancetoFeature']], H3K4Me3_control2[['distancetoFeature']]) 
+samplesme3_abs <- abs(samplesMe3)
+
+
+Treated1 <- H3K27Ac_treated1[['distancetoFeature']]
+Treated2 <- H3K27Ac_treated2[['distancetoFeature']]
+t.test(Treated1, Treated2, 
+       alternative = "two.sided", 
+       mu = 0, 
+       paired = FALSE, 
+       var.equal = FALSE, 
+       conf.level = 0.95)
+Control1 <- H3K27Ac_control1[['distancetoFeature']]
+Control2 <- H3K27Ac_control2[['distancetoFeature']]
+t.test(Control1, Control2, 
+       alternative = "two.sided", 
+       mu = 0, 
+       paired = FALSE, 
+       var.equal = FALSE, 
+       conf.level = 0.95)
+t.test(Treated1, Control1, 
+       alternative = "two.sided", 
+       mu = 0, 
+       paired = FALSE, 
+       var.equal = FALSE, 
+       conf.level = 0.95)
+t.test(Treated2, Control2, 
+       alternative = "two.sided", 
+       mu = 0, 
+       paired = FALSE, 
+       var.equal = FALSE, 
+       conf.level = 0.95)
+Diff <- H3K27Ac_diff[['distancetoFeature']]
+Diff_abs <- abs(Diff)
+Diff1 <- H3K4Me1_diff[['distancetoFeature']]
+Diff1_abs <- abs(Diff1)
+Diff3 <- H3K4Me3_diff[['distancetoFeature']]
+Diff3_abs <- abs(Diff3)
+t.test(Treated1, Diff, 
+       alternative = "less", 
+       mu = 0, 
+       paired = FALSE, 
+       var.equal = FALSE, 
+       conf.level = 0.95)
+wilcox.test(Diff_abs, Diff3_abs, 
+            alternative = "greater", 
+            conf.level = 0.95)
+wilcox.test(Diff1_abs, Diff_abs, 
+            alternative = "two.sided", 
+            conf.level = 0.95)
+wilcox.test(Diff1_abs, Diff3_abs, 
+            alternative = "greater", 
+            conf.level = 0.95)
+wilcox.test(Diff_abs, samples_abs, 
+            conf.level = 0.95)
+
+samples_abs <- samples_abs[!is.na(samples_abs)]
+
+wilcox.test(Diff1_abs, samplesMe1_abs, 
+            conf.level = 0.95)
+wilcox.test(Diff3_abs, samplesme3_abs)
+ks.test(Diff1, Diff3, 
+        alternative = "greater")
+ks.test(Diff1, Diff, 
+        alternative = "greater")
+ks.test(Diff, Diff3, 
+        alternative = "greater")
+ks.test(Diff, samples)
+ks.test(Diff1, samplesm31_abs)
+ks.test(Diff3, samplesMe3)
+ks.test(Diff3, samples)
+
+median(Diff_abs)
+median(samples_abs, na.rm=TRUE)
+median(Diff1_abs)
+median(samplesMe1_abs, na.rm=TRUE)
+median(Diff3)
+median(samplesme3_abs, na.rm=TRUE)
+
+# Combine the data into a single dataframe for ggplot
+data <- data.frame(
+  value = c(Diff1, Diff3, Diff, samples, samplesMe1, samplesMe3),
+  group = factor(c(rep("H3K4Me1", length(Diff1)), rep("H3K4Me3", length(Diff3)), rep("H3K27Ac", length(Diff)), rep("H3K27Ac samples", length(samples)), rep("H3K4Me1 samples", length(samplesMe1)), rep("H3K4Me3 samples", length(samplesMe3))))
+)
+
+# Create the data frame with proper syntax
+data <- data.frame(
+  value = c(Diff_abs, samples_abs),
+  group = factor(c(rep("H3K27Ac Differentially Bound Regions", length(Diff_abs)), rep("H3K27Ac Input Regions", length(samples_abs))))
+)
+
+
+# Histogram
+ggplot(data, aes(x = value, fill = group)) +
+  geom_histogram(alpha = 0.2, position = "identity", bins = 100) +
+  theme_minimal() +
+  labs(title = "Histogram of Histone Mark Genomic Distributions Relative to TSS", x = "Value", y = "Frequency")+
+  xlim(0, 150000) +  # Set x-axis limits
+  ylim(0, 100)
+
+# Histogram with adjusted bin width
+ggplot(data, aes(x = value, fill = group)) +
+  geom_histogram(alpha = 0.5, position = "identity", bins = 50) +  # Adjust bin width
+  theme_minimal() +
+  labs(title = "Histogram of Histone Mark Genomic Distributions Relative to TSS", x = "Value", y = "Frequency") +
+  xlim(0, 150000)  # Set x-axis limits
+
+ggplot(data, aes(x = value, fill = group)) +
+  geom_histogram(alpha = 0.5, position = "identity", bins = 50, stat = "density") +  # Adjust bin width
+  theme_minimal() +
+  labs(title = "Histogram of Histone Mark Genomic Distributions Relative to TSS", x = "Value", y = "Frequency") +
+  xlim(0, 150000)
+
+p_value <- phyper(x - 1, K, N - K, n, lower.tail = FALSE)
+
+
+# Combine the data into a single dataframe for ggplot
+data <- data.frame(
+  value = c(Diff1, Diff3, Diff, samples, samplesMe1, samplesMe3),
+  group = factor(c(rep("H3K4Me1", length(Diff1)), rep("H3K4Me3", length(Diff3)), rep("H3K27Ac", length(Diff)), rep("H3K27Ac samples", length(samples)), rep("H3K4Me1 samples", length(samplesMe1)), rep("H3K4Me3 samples", length(samplesMe3))))
+)
+
+# Histogram with density scaling
+ggplot(data, aes(x = value, fill = group)) +
+  geom_histogram(alpha = 0.3, position = "identity", bins = 100, stat = "density") +  # Use stat="density" for normalized frequencies
+  theme_minimal() +
+  labs(title = "Histogram of Histone Mark Genomic Distributions", x = "Value", y = "Density") +
+  xlim(0, 150000) +  # Set x-axis limits
+  ylim(0, NA)  # Let ggplot automatically determine the y-axis limits based on the data
+
+
+class(Treated1)
+```
+
+### Writing differentially bound BED files
+
+```{r}
+df <- data.frame(seqnames=seqnames(chip_mcf7_H3K4Me1_dba.DB),
+  starts=start(chip_mcf7_H3K4Me1_dba.DB)-1,
+  ends=end(chip_mcf7_H3K4Me1_dba.DB),
+  names=c(rep(".", length(chip_mcf7_H3K4Me1_dba.DB))),
+  scores=c(rep(".", length(chip_mcf7_H3K4Me1_dba.DB))),
+  strands=strand(chip_mcf7_H3K4Me1_dba.DB))
+
+View(chip_mcf7_H3K4Me1_dba.DB)
+View(df)
+
+write.table(df, file="/Users/katietaylor/Downloads/AH3K4Me1dif.bed", quote=F, sep="\t", row.names=F, col.names=F)
+```
+
+## MEME-ChIP
+
+### Peaks shared between all or treated samples intersected with ATAC samples
+
+```{bash}
+# MEME base
+#PBS -l walltime=24:00:00
+#PBS -l select=1:ncpus=8:mem=64gb
+#PBS -J 1-3
+
+# Load appropriate modules
+module load BEDTOOLS/2.31.1
+
+# Set working directory
+cd $PBS_0_WORKDIR
+
+input="/rds/general/user/kmt23/ephemeral/data/MEME"
+list="/rds/general/user/kmt23/home/jobs/array_lists/meme_dif.txt"
+
+bedtools intersect -a /rds/general/user/kmt23/ephemeral/data/MEME/Peaks_bed/03_Treated1_H3K4Me3_peaks.bed -b /rds/general/user/kmt23/ephemeral/data/MEME/Peaks_bed/04_Treated2_H3K4Me3_peaks.bed > /rds/general/user/kmt23/ephemeral/data/MEME/Peaks_bed/Treated_H3K4Me3.bed
+bedtools intersect -a /rds/general/user/kmt23/ephemeral/data/MEME/Peaks_bed/02_Control2_H3K4Me3_peaks.bed -b /rds/general/user/kmt23/ephemeral/data/MEME/Peaks_bed/01_Control1_H3K4Me3_peaks.bed > /rds/general/user/kmt23/ephemeral/data/MEME/Peaks_bed/Control_H3K4Me3.bed
+bedtools intersect -v -a /rds/general/user/kmt23/ephemeral/data/MEME/Peaks_bed/Treated_H3K4Me3.bed -b /rds/general/user/kmt23/ephemeral/data/MEME/Peaks_bed/Control_H3K4Me3.bed > all_H3K4Me3.bed
+
+bedtools intersect -a /rds/general/user/kmt23/ephemeral/data/MEME/Peaks_bed/07_Treated3_H3K4Me1_peaks.bed -b /rds/general/user/kmt23/ephemeral/data/MEME/Peaks_bed/08_Treated4_H3K4Me1_peaks.bed > /rds/general/user/kmt23/ephemeral/data/MEME/Peaks_bed/Treated_H3K4Me1.bed
+bedtools intersect -a /rds/general/user/kmt23/ephemeral/data/MEME/Peaks_bed/05_Control3_H3K4Me1_peaks.bed -b /rds/general/user/kmt23/ephemeral/data/MEME/Peaks_bed/06_Control4_H3K4Me1_peaks.bed > /rds/general/user/kmt23/ephemeral/data/MEME/Peaks_bed/Control_H3K4Me1.bed
+bedtools intersect -v -a /rds/general/user/kmt23/ephemeral/data/MEME/Peaks_bed/Treated_H3K4Me1.bed -b /rds/general/user/kmt23/ephemeral/data/MEME/Peaks_bed/Control_H3K4Me1.bed > all_H3K4Me1.bed
+
+bedtools intersect -a /rds/general/user/kmt23/ephemeral/data/MEME/Peaks_bed/11_Treated5_H3K27Ac_peaks.bed -b /rds/general/user/kmt23/ephemeral/data/MEME/Peaks_bed/12_Treated6_H3K27Ac_peaks.bed > /rds/general/user/kmt23/ephemeral/data/MEME/Peaks_bed/Treated_H3K27Ac.bed
+bedtools intersect -a /rds/general/user/kmt23/ephemeral/data/MEME/Peaks_bed/09_Control5_H3K27Ac_peaks.bed -b /rds/general/user/kmt23/ephemeral/data/MEME/Peaks_bed/10_Control6_H3K27Ac_peaks.bed > /rds/general/user/kmt23/ephemeral/data/MEME/Peaks_bed/Control_H3K27Ac.bed
+bedtools intersect -v -a /rds/general/user/kmt23/ephemeral/data/MEME/Peaks_bed/Treated_H3K27Ac.bed -b /rds/general/user/kmt23/ephemeral/data/MEME/Peaks_bed/Control_H3K27Ac.bed > all_H3K27Ac.bed
+```
+
+```{bash}
+# MEME base
+#PBS -l walltime=24:00:00
+#PBS -l select=1:ncpus=8:mem=64gb
+#PBS -J 1-3
+
+# Load appropriate modules
+source /rds/general/user/kmt23/home/.bash_profile
+source /rds/general/user/kmt23/home/.bashrc
+module load PYTHON/3.11
+module load anaconda3/personal
+source activate ghostscript
+module load MEME/5.5.5
+
+# Set working directory
+cd $PBS_0_WORKDIR
+
+input="/rds/general/user/kmt23/ephemeral/data/MEME"
+list="/rds/general/user/kmt23/home/jobs/array_lists/meme_atac.txt"
+fq_1=$(awk -v taskID=${PBS_ARRAY_INDEX} '$1==taskID {print $2}' ${list})
+fq_2=$(awk -v taskID=${PBS_ARRAY_INDEX} '$1==taskID {print $3}' ${list})
+if [ -z "$fq_1" ]; then
+    echo "No value found for task ID ${PBS_ARRAY_INDEX} in ${list}"
+    exit 1  # or handle the error in another way
+fi
+
+
+input_bed=${input}/${fq_1}
+output_bed=${input}/${fq_1}_cut.bed
+desired_length=800
+
+# Process each line of the BED file
+awk -v len=$desired_length '{
+    # Calculate the original sequence length
+    original_length = $3 - $2
+    
+    # Calculate the middle position
+    middle = $2 + (original_length / 2)
+    
+    # Calculate the new start and end positions
+    new_start = middle - (len / 2)
+    new_end = middle + (len / 2)
+    
+    # Ensure positions are integers
+    new_start = int(new_start)
+    new_end = int(new_end)
+    
+    # Output the new BED entry
+    print $1, new_start, new_end
+}' OFS='\t' $input_bed > $output_bed
+
+echo "Processed BED file saved to $output_bed"
+
+
+bed2fasta -o ${input}/${fq_1}.fa ${input}/${fq_1}_cut.bed /rds/general/user/kmt23/home/src/hg38/hg38p.fa
+
+meme-chip -oc ${input}/${fq_2}_800 \
+-db /rds/general/user/kmt23/home/src/motif_databases/HOCOMOCO/H12CORE_meme_format.meme \
+-db /rds/general/user/kmt23/home/src/motif_databases/JASPAR/JASPAR2024_CORE_non-redundant_pfms_meme.meme \
+-time 480 -minw 6 -maxw 20 \
+-meme-nmotifs 20 \
+-meme-mod zoops -meme-searchsize 100000 \
+-streme-pvt 0.05 -streme-align center \
+-streme-totallength 4000000 -centrimo-local -centrimo-score 5.0 -centrimo-ethresh 10.0 ${input}/${fq_1}.fa
+```
+
+### Differential peaks
+
+```{bash}
+# MEME base
+#PBS -l walltime=24:00:00
+#PBS -l select=1:ncpus=8:mem=64gb
+#PBS -J 1-3
+
+# Load appropriate modules
+source /rds/general/user/kmt23/home/.bash_profile
+source /rds/general/user/kmt23/home/.bashrc
+module load PYTHON/3.11
+module load anaconda3/personal
+source activate ghostscript
+module load MEME/5.5.5
+
+# Set working directory
+cd $PBS_0_WORKDIR
+
+input="/rds/general/user/kmt23/ephemeral/data/MEME"
+list="/rds/general/user/kmt23/home/jobs/array_lists/meme_dif.txt"
+fq_1=$(awk -v taskID=${PBS_ARRAY_INDEX} '$1==taskID {print $2}' ${list})
+fq_2=$(awk -v taskID=${PBS_ARRAY_INDEX} '$1==taskID {print $3}' ${list})
+if [ -z "$fq_1" ]; then
+    echo "No value found for task ID ${PBS_ARRAY_INDEX} in ${list}"
+    exit 1  # or handle the error in another way
+fi
+
+
+input_bed=${input}/${fq_1}
+output_bed=${input}/${fq_1}_cut.bed
+desired_length=1600
+
+# Process each line of the BED file
+awk -v len=$desired_length '{
+    # Calculate the original sequence length
+    original_length = $3 - $2
+    
+    # Calculate the middle position
+    middle = $2 + (original_length / 2)
+    
+    # Calculate the new start and end positions
+    new_start = middle - (len / 2)
+    new_end = middle + (len / 2)
+    
+    # Ensure positions are integers
+    new_start = int(new_start)
+    new_end = int(new_end)
+    
+    # Output the new BED entry
+    print $1, new_start, new_end
+}' OFS='\t' $input_bed > $output_bed
+
+echo "Processed BED file saved to $output_bed"
+
+
+bed2fasta -o ${input}/${fq_1}.fa ${input}/${fq_1}_cut.bed /rds/general/user/kmt23/home/src/hg38/hg38p.fa
+
+meme-chip -oc ${input}/${fq_2}_1600 \
+-db /rds/general/user/kmt23/home/src/motif_databases/HOCOMOCO/H12CORE_meme_format.meme \
+-db /rds/general/user/kmt23/home/src/motif_databases/JASPAR/JASPAR2024_CORE_non-redundant_pfms_meme.meme \
+-time 480 -minw 6 -maxw 20 \
+-meme-nmotifs 20 \
+-meme-mod zoops -meme-searchsize 100000 \
+-streme-pvt 0.05 -streme-align center \
+-streme-totallength 4000000 -centrimo-local -centrimo-score 5.0 -centrimo-ethresh 10.0 ${input}/${fq_1}.fa
+```

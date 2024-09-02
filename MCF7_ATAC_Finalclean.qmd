@@ -1,0 +1,600 @@
+---
+title: "ATAC Downstream Analysis"
+format: html
+editor: visual
+---
+
+## Quality Control
+
+### ATACseqQC
+
+We start with ATACseqQC. This is quite computationally intensive, so we use our base bam file for this analysis. That is, the bam file without shifting using Alignment Sieve nor filtering for multimapped reads.
+
+```{r}
+library(ATACseqQC)
+# setting the path to the bam files
+YMM_dir_path <- "/Volumes/mydrive/ephemeral/data/SAM_ATAC/realigned/BAM_BAI/noM"
+# listing the files
+YMM_bam_files <- list.files(path = YMM_dir_path, 
+                            pattern = "^sorted.*\\.fastq\\.sam_noM\\.bam$", 
+                            full.names = TRUE)
+bamfile <- YMM_bam_files[1]#[2]#[3]#[4]
+print(bamfile)
+bamfile.labels <- gsub(".fastq.sam_noM.bam", "", basename(bamfile))
+bamfile.labels <- gsub("sorted_", "", bamfile.labels)
+print(bamfile.labels)
+fragSize <- fragSizeDist(bamfile, bamfile.labels)
+```
+
+We then start with nucleosome positioning by adjusting the read start sites. We have already done this with Alignment Sieve, but unfortunately, this took out the Bam file tags (listed below). This helps ATACSeqQC recognize the reads
+
+```{r}
+library(Rsamtools)
+possibleTag <- list("integer"=c("AM", "AS", "CM", "CP", "FI", "H0", "H1", "H2", 
+                                "HI", "IH", "MQ", "NH", "NM", "OP", "PQ", "SM",
+                                "TC", "UQ"), 
+                    "character"=c("BC", "BQ", "BZ", "CB", "CC", "CO", "CQ", "CR",
+                                  "CS", "CT", "CY", "E2", "FS", "LB", "MC", "MD",
+                                  "MI", "OA", "OC", "OQ", "OX", "PG", "PT", "PU",
+                                  "Q2", "QT", "QX", "R2", "RG", "RX", "SA", "TS",
+                                  "U2"))
+
+bamTop100 <- scanBam(BamFile(bamfile, yieldSize = 100),
+                     param = ScanBamParam(tag=unlist(possibleTag)))[[1]]$tag
+tags <- names(bamTop100)[lengths(bamTop100)>0]
+tags
+```
+
+We set a temporary output path by using makedirs and load the hg38 genome.
+
+```{r}
+basedir <- "/Users/katietaylor/Downloads/transfer/"
+outPath <- paste0(basedir,bamfile.labels)
+library(TxDb.Hsapiens.UCSC.hg38.knownGene)
+
+```
+
+We now can actually shift the genome. This takes a long time, so eval will be set to `FALSE` when rendering the document
+
+```{r}
+seqlev <- "chr1" ## subsample data for quick run
+seqinformation <- seqinfo(TxDb.Hsapiens.UCSC.hg38.knownGene)
+which <- as(seqinformation[seqlev], "GRanges")
+gal <- readBamFile(bamfile, which=which, asMates=TRUE, bigFile=TRUE)
+shiftedBamfile <- file.path(outPath, "shifted.bam")
+gal1 <- shiftGAlignmentsList(gal, outbam=shiftedBamfile)
+```
+
+We now can calculate the promoter/transcript score (PT score), nucleosome free region score (NFR score), and TSS
+
+```{r}
+library(TxDb.Hsapiens.UCSC.hg38.knownGene)
+txs <- transcripts(TxDb.Hsapiens.UCSC.hg38.knownGene)
+pt <- PTscore(gal1, txs)
+plot(pt$log2meanCoverage, pt$PT_score, 
+     xlab="log2 mean coverage",
+     ylab="Promoter vs Transcript")
+
+nfr <- NFRscore(gal1, txs)
+plot(nfr$log2meanCoverage, nfr$NFR_score, 
+     xlab="log2 mean coverage",
+     ylab="Nucleosome Free Regions score",
+     main="NFRscore for 200bp flanking TSSs",
+     xlim=c(-8, 4), ylim=c(-5, 5))
+
+tsse <- TSSEscore(gal1, txs)
+tsse$TSSEscore
+plot(100*(-9:10-.5), tsse$values, type="b", 
+     xlab="distance to TSS",
+     ylab="aggregate TSS score")
+```
+
+## Annotations
+
+### ChIPseeker
+
+#### MACS2 & Genrich
+
+```{r}
+library(ChIPseeker)
+library(TxDb.Hsapiens.UCSC.hg38.knownGene)
+library(clusterProfiler)
+library(annotables)
+```
+
+We print the samples to ensure that we have the hard drive plugged in if needed.
+
+```{r}
+directories <- c("/Volumes/mydrive/ephemeral/data/SAM_ATAC/realigned/BAM_BAI/noM/GENRICH", 
+                 "/Volumes/mydrive/ephemeral/data/SAM_ATAC/realigned/BAM_BAI/noM/nomulti/GENRICH", 
+                 "/Volumes/mydrive/ephemeral/data/SAM_ATAC/realigned/BAM_BAI/no/AlignmentSieve/MACS2A",
+                 "/Volumes/mydrive/ephemeral/data/SAM_ATAC/realigned/BAM_BAI/noM/AlignmentSieve/MACS2B",
+                 "/Volumes/mydrive/ephemeral/data/SAM_ATAC/realigned/BAM_BAI/noM/AlignmentSieve/MACS2C",
+                 "/Volumes/mydrive/ephemeral/data/SAM_ATAC/realigned/BAM_BAI/noM/nomulti/AlignmentSieve/MACS2A", 
+                 "/Volumes/mydrive/ephemeral/data/SAM_ATAC/realigned/BAM_BAI/noM/nomulti/AlignmentSieve/MACS2B", 
+                 "/Volumes/mydrive/ephemeral/data/SAM_ATAC/realigned/BAM_BAI/noM/nomulti/AlignmentSieve/MACS2C")
+```
+
+We then list the files present in the listed directories and give them names
+
+```{r}
+list_files_in_directory <- function(directory) {
+  return(list.files(directory, pattern = "*narrowPeak", full.names = TRUE, recursive = TRUE))
+}
+files_list <- lapply(directories, list_files_in_directory)
+
+print(files_list)
+samplefiles <- unlist(files_list)
+print(samplefiles)
+names(samplefiles) <- c("GENRICH NMM Treated 1", "GENRICH NMM Treated 2", "GENRICH NMM Control 1", "GENRICH NMM Control 2",
+                        "GENRICH YMM Treated 1", "GENRICH YMM Treated 2", "GENRICH YMM Control 1", "GENRICH YMM Control 2",
+                        "MACS2A NMM Treated 1", "MACS2A NMM Treated 2", "MACS2A NMM Control 1", "MACS2A NMM Control 2",
+                        "MACS2B NMM Treated 1", "MACS2B NMM Treated 2", "MACS2B NMM Control 1", "MACS2B NMM Control 2", 
+                        "MACS2C NMM Treated 1", "MACS2C NMM Treated 2", "MACS2C NMM Control 1", "MACS2C NMM Control 2", 
+                        "MACS2A YMM Treated 1", "MACS2A YMM Treated 2", "MACS2A YMM Control 1", "MACS2A YMM Control 2", 
+                        "MACS2B YMM Treated 1", "MACS2B YMM Treated 2", "MACS2B YMM Control 1", "MACS2B YMM Control 2", 
+                        "MACS2C YMM Treated 1", "MACS2C YMM Treated 2", "MACS2C YMM Control 1", "MACS2C YMM Control 2")
+```
+
+We want to annotate all of the files in this list, so we use an `lapply` function to apply the annotatePeak function to all listed files. We can visualize this entire list or the peakAnnoList_select subselection (just the YMM, since it looks like multimapped read filtering does not make a difference downstream.
+
+```{r}
+peakAnnoList <- lapply(samplefiles, annotatePeak, TxDb=txdb, 
+                       tssRegion=c(-1000, 1000), verbose=FALSE)
+peakAnnoList_select <- peakAnnoList[c(5,6,21,22,25,26,29,30,7,8,23,24,27,28,31,32)]
+```
+
+We would like to visualize the difference between all of these peakcalling methods. We don't see much difference, honestly, so we decide to use the MACS2 sets of 3 alignment size non-multimapped filtered peaks. This offers increased recgonition and more information (differentiation between nucleosome free regions, mononucleosome regions, and NFR regions).
+
+```{r}
+# creating a bar chart for all samples for feature distribution
+plotAnnoBar(peakAnnoList_select)
+
+# creating bar chart for all samples for distance to TSS
+plotDistToTSS(peakAnnoList_select, title="Distribution of transcription factor-binding loci \n relative to TSS")
+
+```
+
+We also create upset plots for our macs peaks
+
+```{r}
+library(ggupset)
+library(ggimage)
+library(grid)
+upsetplot(peakAnnoList[["MACS2A YMM Treated 1"]], vennpie=TRUE)
+grid.text("MACS2A YMM Peaks Upset Plot", x = 0.65, y = 0.95,
+          gp = gpar(fontsize = 20))
+upsetplot(peakAnnoList[["MACS2B YMM Treated 1"]], vennpie=TRUE)
+grid.text("MACS2B YMM Peaks Upset Plot", x = 0.65, y = 0.95,
+          gp = gpar(fontsize = 20))
+upsetplot(peakAnnoList[["MACS2C YMM Treated 1"]], vennpie=TRUE)
+grid.text("MACS2C YMM Peaks Upset Plot", x = 0.65, y = 0.95,
+          gp = gpar(fontsize = 20))
+```
+
+#### THOR
+
+We want to see how regular the distribution of genomic annotations is between samples and between conditions. Since thor does not offer us peak files for each sample, we look between the conditions. We actually see a fair amount of change between the condition, which is not something that we have seen with the other peak callers, indicating that this may not be the best tool for us to use.
+
+```{r}
+library("ChIPseeker")
+library("genomation")
+library(TxDb.Hsapiens.UCSC.hg38.knownGene)
+txdb <- TxDb.Hsapiens.UCSC.hg38.knownGene
+thor <- readBed("/Users/katietaylor/Downloads/THOR/THOR-exp-2024_04_26_18_13_11-diffpeaks-gain.bed", track.line = FALSE, remove.unusual = FALSE,
+        zero.based = TRUE)
+thor_down <- readBed("/Users/katietaylor/Downloads/THOR/THOR-exp-2024_04_26_18_13_11-diffpeaks-lose.bed", track.line = FALSE, remove.unusual = FALSE,
+                   zero.based = TRUE)
+thor_up_anno <- annotatePeak(thor, TxDb=txdb, 
+                             tssRegion=c(-1000, 1000), verbose=FALSE)
+thor_down_anno <- annotatePeak(thor_down, TxDb=txdb, 
+                               tssRegion=c(-1000, 1000), verbose=FALSE)
+plotAnnoBar(list(thor_up_anno, thor_down_anno))
+plotDistToTSS(list(thor_up_anno, thor_down_anno), title="Distribution of transcription factor-binding loci \n relative to TSS")
+
+```
+
+We also look at the upset plots for thor for good measure, and we notice differences here, as well.
+
+```{r}
+library(ggupset)
+library(ggimage)
+library(grid)
+upsetplot(thor_up_anno, vennpie=TRUE)
+grid.text("THOR upregulated open chromatin regions", x = 0.65, y = 0.95,
+          gp = gpar(fontsize = 20))
+upsetplot(thor_down_anno, vennpie=TRUE)
+grid.text("THOR downregulated open chromatin regions", x = 0.65, y = 0.95,
+          gp = gpar(fontsize = 20))
+```
+
+## DiffBind
+
+We move on by analyzing our atac seq data with Diffbind. We use the peakfiles generated by the non_multimapped MACS2 peaks. We first start by pointing Diffbind to the right metadata
+
+```{r}
+library(DiffBind)
+library(GreyListChIP)
+library(csaw)
+library(edgeR)
+
+```
+
+```{r}
+samples_mcf7_atac_A <- read.csv('/Users/katietaylor/70006/ATAC_mcf7/YMM_AS_MACS2A_Diffbind_meta.csv', 
+                                sep = ",", 
+                                header = TRUE,
+                                nrows = 4)
+samples_mcf7_atac_B <- read.csv('/Users/katietaylor/70006/ATAC_mcf7/YMM_AS_MACS2B_Diffbind_meta.csv', 
+                              sep = ",", 
+                              header = TRUE,
+                              nrows = 4)
+samples_mcf7_atac_C <- read.csv('/Users/katietaylor/70006/ATAC_mcf7/YMM_AS_MACS2C_Diffbind_meta.csv', 
+                              sep = ",", 
+                              header = TRUE,
+                              nrows = 4)
+samples_list <- list(samples_mcf7_atac_A, samples_mcf7_atac_B, samples_mcf7_atac_C)
+```
+
+We create dba objects for all three types of peaks
+
+```{r}
+atac_mcf7_dba <- lapply(samples_list, function(sampleSheet) {
+  dba(sampleSheet = sampleSheet, scoreCol = 5)
+})
+atac_mcf7_dba[[1]]$config$cores <- 2
+atac_mcf7_dba[[2]]$config$cores <- 2
+atac_mcf7_dba[[3]]$config$cores <- 2
+atac_mcf7_dba[[1]]$config$yieldSize <- 500000
+atac_mcf7_dba[[2]]$config$yieldSize <- 500000
+atac_mcf7_dba[[3]]$config$yieldSize <- 500000
+```
+
+We also need to count for all three types of peaks
+
+```{r}
+atac_mcf7_dba <- lapply(atac_mcf7_dba, function(dba_obj) {
+  dba.count(dba_obj, bUseSummarizeOverlaps = atac_mcf7_dba[[1]]$config$yieldSize, bParallel = FALSE, summits = FALSE)
+})
+
+saveRDS(atac_mcf7_dba[[1]], file = "/Users/katietaylor/70006/ATAC_mcf7/MACS2Acounts.rds")
+saveRDS(atac_mcf7_dba[[2]], file = "/Users/katietaylor/70006/ATAC_mcf7/MACS2Bcounts.rds")
+saveRDS(atac_mcf7_dba[[3]], file = "/Users/katietaylor/70006/ATAC_mcf7/MACS2Ccounts.rds")
+atac_mcf7_dba[[1]]
+plot(atac_mcf7_dba[[1]])
+
+
+
+one <- readRDS("/Users/katietaylor/70006/ATAC_mcf7/MACS2Acounts.rds")
+two <- readRDS("/Users/katietaylor/70006/ATAC_mcf7/MACS2Bcounts.rds")
+three <- readRDS("/Users/katietaylor/70006/ATAC_mcf7/MACS2Ccounts.rds")
+atac_mcf7_dba <- list(one, two, three)
+```
+
+We can now normalize and contrast
+
+```{r}
+atac_mcf7_dba <- lapply(atac_mcf7_dba, function(dba_obj) {
+  dba.normalize(dba_obj)
+})
+
+norm <- lapply(atac_mcf7_dba, function(dba_obj){
+  dba.normalize(dba_obj, bRetrieve=TRUE)
+})
+norm[[3]] # or 2 or 3
+atac_mcf7_dba <- lapply(atac_mcf7_dba, function(dba_obj){
+  dba.contrast(dba_obj, reorderMeta=list(Treatment="control"), minMembers = 2)
+})
+atac_mcf7_dba[[1]]
+```
+
+Finally, we can analyze
+
+```{r}
+atac_mcf7_dba <- lapply(atac_mcf7_dba, function(dba_obj){
+  dba.analyze(dba_obj)
+})
+atac_mcf7_dba1 <- atac_mcf7_dba[[1]]
+```
+
+```{r}
+dba.show(atac_mcf7_dba[[1]], bContrasts=TRUE)
+dba.show(atac_mcf7_dba[[2]], bContrasts=TRUE)
+dba.show(atac_mcf7_dba[[3]], bContrasts=TRUE)
+plot(atac_mcf7_dba[[1]], contrast=1)
+lapply(atac_mcf7_dba, function(dba_obj){
+  plot(dba_obj)
+})
+atac_mcf7_dba_macs2a.DB <- dba.report(atac_mcf7_dba[[1]])
+atac_mcf7_dba_macs2b.DB <- dba.report(atac_mcf7_dba[[2]])
+atac_mcf7_dba_macs2c.DB <- dba.report(atac_mcf7_dba[[3]])
+saveRDS(atac_mcf7_dba_macs2a.DB, file = "/Users/katietaylor/70006/ATAC_mcf7/MACS2A_db_GRANGES.rds")
+saveRDS(atac_mcf7_dba_macs2b.DB, file = "/Users/katietaylor/70006/ATAC_mcf7/MACS2B_db_GRANGES.rds")
+saveRDS(atac_mcf7_dba_macs2c.DB, file = "/Users/katietaylor/70006/ATAC_mcf7/MACS2C_db_GRANGES.rds")
+atac_mcf7_dba_macs2a.DB <- readRDS("/Users/katietaylor/70006/ATAC_mcf7/MACS2A_db_GRANGES.rds")
+atac_mcf7_dba_macs2b.DB <- readRDS("/Users/katietaylor/70006/ATAC_mcf7/MACS2B_db_GRANGES.rds")
+atac_mcf7_dba_macs2c.DB <- readRDS("/Users/katietaylor/70006/ATAC_mcf7/MACS2C_db_GRANGES.rds")
+```
+
+### Plots
+
+```{r}
+lapply(atac_mcf7_dba, function(dba_obj){
+  dba.plotVenn(dba_obj, contrast = 1, bDB=TRUE, bGain = TRUE, bLoss=TRUE, bAll = FALSE)
+})
+dba.plotVenn(atac_mcf7_dba, contrast=1, bDB=TRUE, bGain=TRUE, bLoss=TRUE, bAll=FALSE)
+lapply(atac_mcf7_dba, function(dba_obj){
+  dba.plotPCA(dba_obj, DBA_TREATMENT,label=DBA_TREATMENT, vColors = c("#85C1E9", "#CD5C5C"), labelSize = 0.8)
+})
+dba.plotPCA(atac_mcf7_dba[[1]],DBA_TREATMENT,label=DBA_TREATMENT, vColors = c("#85C1E9", "#CD5C5C"), labelSize = 0.8)
+dba.plotPCA(chip_mcf7_H3K4Me1_dba, )
+dba.plotPCA(atac_mcf7_dba[[1]], contrast=1, label=DBA_TREATMENT)
+lapply(atac_mcf7_dba, function(dba_obj){
+  dba.plotMA(dba_obj)
+})
+dba.plotMA(atac_mcf7_dba[[1]])
+lapply(atac_mcf7_dba, function(dba_obj){
+  dba.plotVolcano(dba_obj)
+})
+dba.plotVolcano(atac_mcf7_dba[[1]])
+hmap <- colorRampPalette(c("#CD5C5C", "black", "#85C1E9"))(n = 13)
+readscores <- lapply(atac_mcf7_dba, function(dba_obj){
+  dba.plotHeatmap(dba_obj, contrast=1, correlations=FALSE,
+                                scale="row", colScheme = hmap, maxSites = 2000)
+})
+readscores <- dba.plotHeatmap(atac_mcf7_dba[[1]], contrast=1, correlations=FALSE,
+                                scale="row", colScheme = hmap, maxSites = 1692)
+```
+
+```{r}
+profiles <- dba.plotProfile(atac_mcf7_dba[[1]])
+profiles <- dba.plotProfile(atac_mcf7_dba[[2]])
+profiles <- dba.plotProfile(atac_mcf7_dba[[3]])
+png("/Users/katietaylor/70006/ATAC_mcf7/diffbindprof.png", width = 800, height = 1600)
+dba.plotProfile(profiles, 
+                matrices_color = c("#FDF2E9", "#46677d", "#CD5C5C"), 
+                group_anno_color = c("#46677d", "#CD5C5C"))
+dev.off()
+```
+
+## ChIPpeakAnno
+
+Now, we want to annotate our ATAC seq data. We annotate this data with ChippeakAnno, similarly to how we annotated our ChIPseq data.
+
+```{r}
+library("ChIPpeakAnno")
+library("GenomicRanges")
+library("rtracklayer")
+library("org.Hs.eg.db")
+library("EnsDb.Hsapiens.v86")
+enhancers_anno <- read.delim('/Users/katietaylor/Downloads/enhancers_unique.txt', header = TRUE)
+colnames(enhancers_anno) <- c("seqnames", "start", "end", "Feature_type", "Epigenome_name", "Activity", "tx_id")
+enhancers_df <- enhancers_anno[, c(1, 2, 3)]
+print(duplicated(colnames(enhancers_anno)))
+print(is.na(colnames(enhancers_anno)))
+annoData <- toGRanges(EnsDb.Hsapiens.v86, feature="gene")
+annoData <- toGRanges(enhancers_anno, format = 'others')
+annoData <- toGRanges("/Volumes/mydrive/all_hg38lift.mnemonics.bedFiles/merged_output.bed", format = 'BED')
+annoData[1:2]
+```
+
+```{r}
+atac_seq_anno_list <- list(atac_mcf7_dba_macs2a.DB, atac_mcf7_dba_macs2b.DB, atac_mcf7_dba_macs2a.DB)
+annotated_list <- lapply(atac_seq_anno_list, function(anno) {
+  annotatePeakInBatch(anno, AnnotationData = annoData)
+})
+names(annotated_list[[1]]) <- make.names(seqnames(annotated_list[[1]]), unique = TRUE)
+names(annotated_list[[2]]) <- make.names(seqnames(annotated_list[[2]]), unique = TRUE)
+names(annotated_list[[3]]) <- make.names(seqnames(annotated_list[[3]]), unique = TRUE)
+```
+
+```{r}
+anno_df_macs2a <- as.data.frame(annotated_list[[1]])
+anno_df_macs2b <- as.data.frame(annotated_list[[2]])
+anno_df_macs2c <- as.data.frame(annotated_list[[3]])
+write.csv(anno_df_macs2a, file = "/Users/katietaylor/70006/ATAC_mcf7/anno_df_macs2a.csv", row.names = FALSE)
+write.csv(anno_df_macs2b, file = "/Users/katietaylor/70006/ATAC_mcf7/anno_df_macs2b.csv", row.names = FALSE)
+write.csv(anno_df_macs2c, file = "/Users/katietaylor/70006/ATAC_mcf7/anno_df_macs2c.csv", row.names = FALSE)
+```
+
+## monoLisa
+
+```{r, eval = FALSE}
+if (!requireNamespace("BiocManager", quietly = TRUE))
+    install.packages("BiocManager")
+BiocManager::install("RSQLite")
+
+library(GenomicRanges)
+library(SummarizedExperiment)
+library(RSQLite)
+library(JASPAR2022)
+library(TFBSTools)
+library(BSgenome.Hsapiens.UCSC.hg38)
+library(monaLisa)
+library(ComplexHeatmap)
+library(circlize)
+```
+
+```{r}
+macs2a_gr <- atac_seq_anno_list[[1]]
+macs2b_gr <- atac_seq_anno_list[[2]]
+macs2c_gr <- atac_seq_anno_list[[3]]
+hist(macs2c_gr$Fold, 100, col = "gray", main = "",
+     xlab = "Fold change in accesibility", ylab = "Number of genomic regions")
+bins <- bin(x = macs2c_gr$Fold, binmode = "equalN", nElement = 100)
+levels(bins)
+plotBinDensity(macs2c_gr$Fold, bins, legend = "topleft")
+
+JASPAR2024 <- JASPAR2024()
+#> adding rname 'https://testjaspar.uio.no/download/database/JASPAR2024.sqlite'
+JASPARConnect <- RSQLite::dbConnect(RSQLite::SQLite(), db(JASPAR2024))
+RSQLite::dbGetQuery(JASPARConnect, 'SELECT * FROM MATRIX LIMIT 5')
+
+pwms <- getMatrixSet(JASPARConnect,
+                     opts = list(matrixtype = "PWM",
+                                 tax_group = "vertebrates"))
+macs2c_gr <- macs2c_gr[seqnames(macs2c_gr) != "KI270713.1"]
+macs2cqseqs <- getSeq(BSgenome.Hsapiens.UCSC.hg38, macs2c_gr)
+plotBinDiagnostics(seqs = macs2cqseqs, bins = bins, aspect = "GCfrac")
+se <- calcBinnedMotifEnrR(seqs = macs2cqseqs, bins = bins, pwmL = pwms)
+dim(se)
+sel <- apply(assay(se, "negLog10Padj"), 1, 
+             function(x) max(abs(x), 0, na.rm = TRUE)) > 1.6
+sum(sel)
+seSel <- se[sel, ]
+
+# plot
+plotMotifHeatmaps(x = seSel, which.plots = c("log2enr", "negLog10Padj"), 
+                  width = 2.0, cluster = TRUE, maxEnr = 2, maxSig = 10, 
+                  show_motif_GC = TRUE, row_names_gp = gpar(fontsize = 5), heatmap_height = unit(2, "npc"))
+```
+
+## rGREAT
+
+```{r}
+library(rGREAT)
+```
+
+We can then use lapply to perform GREAT analysis on our GRanges object list
+
+```{r}
+GREAT_list <- lapply(annotated_list, function(gr) great(gr, "GO:BP", "hg38"))
+```
+
+We then can create some cool plots with our GREAT output
+
+```{r}
+# MACS2A
+plotVolcano(GREAT_list[[1]])
+plotRegionGeneAssociations(GREAT_list[[1]])
+#shinyReport(GREAT_list[[1]])
+# MACS2B
+plotVolcano(GREAT_list[[2]])
+plotRegionGeneAssociations(GREAT_list[[2]])
+#shinyReport(GREAT_list[[2]])
+# MACS2C
+plotVolcano(GREAT_list[[3]])
+plotRegionGeneAssociations(GREAT_list[[3]])
+#shinyReport(GREAT_list[[3]])
+```
+
+```{r}
+great_df_MACS2A <- GREAT_list[[1]]@table
+great_df_MACS2B <- GREAT_list[[2]]@table
+great_df_MACS2C <- GREAT_list[[3]]@table
+write.csv(great_df_MACS2A, file = "/Users/katietaylor/70006/ATAC_mcf7/great_df_macs2a.csv", row.names = FALSE)
+write.csv(great_df_MACS2B, file = "/Users/katietaylor/70006/ATAC_mcf7/great_df_macs2b.csv", row.names = FALSE)
+write.csv(great_df_MACS2C, file = "/Users/katietaylor/70006/ATAC_mcf7/great_df_macs2c.csv", row.names = FALSE)
+```
+
+## rrvigo
+
+```{r}
+library("rrvgo")
+library("org.Hs.eg.db")
+library(dplyr)
+library(ggrepel)
+
+great_df_MACS2A <- great_df_MACS2A %>%
+  dplyr::filter(p_adjust < 0.05)
+
+#
+simMatrix <- calculateSimMatrix(great_df_MACS2A$id,
+                                orgdb="org.Hs.eg.db",
+                                ont="BP",
+                                method="Rel")
+
+scores <- setNames(-log10(great_df_MACS2A$p_adjust),great_df_MACS2A$id)
+
+reducedTerms <- reduceSimMatrix(simMatrix,
+                                scores,
+                                threshold=0.9,
+                                orgdb="org.Hs.eg.db")
+
+heatmapPlot(simMatrix,
+            reducedTerms,
+            annotateParent=TRUE,
+            annotationLabel="parentTerm",
+            fontsize=4)
+scatterPlot(simMatrix, reducedTerms, labelSize = 2)
+treemapPlot(reducedTerms)
+print(reducedTerms)
+```
+
+#### Plot of chromosome length
+
+```{r}
+View(atac_mcf7_dba_macs2a.DB)
+atac_mcf7_df <- as.data.frame(atac_mcf7_dba_macs2b.DB)
+View(atac_mcf7_df)
+
+ggplot(atac_mcf7_df, aes(x=width)) + 
+  geom_histogram(binwidth=10)
+
+df <- data.frame(seqnames=seqnames(atac_mcf7_dba_macs2b.DB),
+  starts=start(atac_mcf7_dba_macs2b.DB)-1,
+  ends=end(atac_mcf7_dba_macs2b.DB),
+  names=c(rep(".", length(atac_mcf7_dba_macs2b.DB))),
+  scores=c(rep(".", length(atac_mcf7_dba_macs2b.DB))),
+  strands=strand(atac_mcf7_dba_macs2b.DB))
+write.table(df, file="/Users/katietaylor/70006/ATAC_mcf7/mcf7_atac_cutsites.bed", quote=F, sep="\t", row.names=F, col.names=F)
+```
+
+## Footprinting - Tobias
+
+```{bash}
+# TF footprinting with TOBIAS
+#PBS -l walltime=24:00:00
+#PBS -l select=1:ncpus=8:mem=32gb
+#PBS -J 1-4
+
+# Load appropriate modules
+module load TOBIAS/0.14.0
+
+# Set working directory
+cd $PBS_0_WORKDIR
+
+inputdir=/rds/general/user/kmt23/ephemeral/data/SAM_ATAC/ATAC
+outputdir=/rds/general/user/kmt23/ephemeral/data/SAM_ATAC/ATAC/Tobias
+list=/rds/general/user/kmt23/home/jobs/array_lists/Tobias_array.txt
+fq_1=$(awk -v taskID=${PBS_ARRAY_INDEX} '$1==taskID {print $2}' ${list})
+fq_2=$(awk -v taskID=${PBS_ARRAY_INDEX} '$1==taskID {print $3}' ${list})
+fq_3=$(awk -v taskID=${PBS_ARRAY_INDEX} '$1==taskID {print $4}' ${list})
+
+TOBIAS ATACorrect --bam ${inputdir}/${fq_1} --genome /rds/general/user/kmt23/home/src/hg38/hg38p.fa --peaks ${inputdir}/${fq_2} --outdir ${inputdir} --cores 8
+TOBIAS FootprintScores --signal ${inputdir}/${fq_3}_corrected.bw --regions ${inputdir}/${fq_2} --output ${inputdir}/${fq_3}_footprints.bw --cores 8
+```
+
+Plotting - not included in final thesis
+
+```{bash}
+# Plotting TF footprints
+#PBS -l walltime=24:00:00
+#PBS -l select=1:ncpus=8:mem=32gb
+#PBS -J 1-2
+
+# Load appropriate modules
+module load TOBIAS/0.14.0
+
+# Set working directory
+cd $PBS_0_WORKDIR
+
+inputdir=/rds/general/user/kmt23/ephemeral/data/SAM_ATAC/ATAC
+outputdir=/rds/general/user/kmt23/ephemeral/data/SAM_ATAC/ATAC/Tobias
+list=/rds/general/user/kmt23/home/jobs/array_lists/Tobias_plot.txt
+fq_1=$(awk -v taskID=${PBS_ARRAY_INDEX} '$1==taskID {print $2}' ${list})
+fq_2=$(awk -v taskID=${PBS_ARRAY_INDEX} '$1==taskID {print $3}' ${list})
+fq_3=$(awk -v taskID=${PBS_ARRAY_INDEX} '$1==taskID {print $4}' ${list})
+fq_4=$(awk -v taskID=${PBS_ARRAY_INDEX} '$1==taskID {print $5}' ${list})
+
+TOBIAS PlotAggregate --TFBS ${inputdir}/${fq_3} ${inputdir}/${fq_4} --signals ${inputdir}/Tobias/${fq_1}_corrected.bw ${inputdir}/Tobias/${fq_2}_corrected.bw --output /rds/general/user/kmt23/ephemeral/data/SAM_ATAC/ATAC/Tobias/plotting/BATF_footprint_comparison_subsets.png --share_y both --plot_boundaries
+```
+
+You can add options to executable code like this
+
+```{r}
+#| echo: false
+2 * 2
+```
+
+The `echo: false` option disables the printing of code (only output is displayed).

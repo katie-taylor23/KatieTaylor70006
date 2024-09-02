@@ -1,0 +1,1296 @@
+---
+title: "MCF7 RNA Downstream Analysis"
+format: html
+editor: visual
+---
+
+## Concatenation of files
+
+### RSubread count concatenation
+
+First, we create a directory of all files, list all of the files in the directory, and create an empty list to store the dataframes. We also need to load many packages.
+
+```{r}
+library(tidyverse)
+library(ggplot2)
+library(tidyr)
+library(readr)
+library(tibble)
+library(purrr)
+library(dplyr)
+library(ggfortify)
+```
+
+```{r}
+# Directory containing your files - may not need the / at the end
+directory <- "/Users/katietaylor/70006/mcf7_counts_exp/"
+
+# List all files in the directory
+file_list <- list.files(path = directory, pattern = "\\.txt$", full.names = TRUE)
+
+# Initialize an empty list to store data frames
+Rsubread_list <- list()
+```
+
+Then, we loop through each file and add the data frame to list
+
+```{r}
+# Loop through each file
+for(file in file_list) {
+  # Read the file and store it as a data frame
+  data <- read_delim(file)
+  
+  # Add the data frame to the list
+  Rsubread_list <- append(Rsubread_list, list(data))
+}
+```
+
+Then, we rename the gene_name column, so that we can perform a full_join with this column and initialize an empty data frame to the store the result. We loop through each data frame in our previously formed list, and we add it to the dataframe.
+
+```{r}
+# Rename the gene name column
+Rsubread_list <- map(Rsubread_list, ~ .x %>% 
+                     rename(gene_name = !!rlang::sym(names(.)[1])))
+
+# Concatenating these newly created dataframes with a loop
+# Initialize an empty data frame to store the result
+Rsubread_concat <- data.frame(gene_name = character())
+
+# Loop through each data frame in the list
+for (df in Rsubread_list) {
+  # Perform full join with the current data frame
+  Rsubread_concat <- full_join(Rsubread_concat, df, by = "gene_name")
+}
+```
+
+Then, we rename the sample names to make them a bit easier to read and store the result as a .csv file
+
+```{r}
+# Renaming Rsubread_concat
+Rsubreadnames <- list("1_treated_Subread", "2_treated_Subread", "3_treated_Subread", "4_treated_Subread", "5_treated_Subread", 
+                   "6_untreated_Subread", "7_untreated_Subread", "8_untreated_Subread", "9_untreated_Subread", "10_untreated_Subread")
+
+Rsubreadnames <- as.character(Rsubreadnames)
+renaming_specs <- setNames(names(Rsubread_concat)[-1], Rsubreadnames)
+Rsubread_concat_named <- Rsubread_concat %>%
+  rename(!!!renaming_specs)
+
+write.csv(as.data.frame(Rsubread_concat_named), 
+          file="/Users/katietaylor/70006/Rsubread_concat_named.csv")
+
+read.csv(file="/Users/katietaylor/70006/Rsubread_concat_named.csv")
+Rsubread_concat_filtered <- Rsubread_concat_named %>%
+  dplyr::mutate(across(everything(), ~ ifelse(. < 10, NA, .))) %>%
+  dplyr::filter(rowSums(is.na(.)) < 5)
+
+write.csv(as.data.frame(Rsubread_concat_filtered), 
+          file="/Users/katietaylor/70006/Rsubread_concat_named_filtered.csv")
+```
+
+### STAR Count concatenation
+
+First, we create a directory of all files, list all of the files in the directory, and create an empty list to store the dataframes.
+
+```{r}
+# Directory containing your files - may not need the / at the end
+directory2 <- "/Volumes/mydrive/mcf7_bai_bam/mcf7_counts_star/"
+
+# List all files in the directory
+file2_list <- list.files(path = directory2, pattern = "\\.tab$", full.names = TRUE)
+
+# Initialize an empty list to store data frames
+STAR_li <- list()
+```
+
+Then, we loop through each file and add the data frame to list
+
+```{r}
+# Loop through each file
+for(file in file2_list) {
+  # Read the file and store it as a data frame
+  data2 <- read_delim(file)
+  
+  # Add the data frame to the list
+  STAR_li <- append(STAR_li, list(data2))
+}
+```
+
+Then, we rename the gene_name column, so that we can perform a full_join with this column and initialize an empty data frame to the store the result. We loop through each data frame in our previously formed list, and we add it to the dataframe.
+
+```{r}
+#Rename the gene name column
+STAR_l <- map(STAR_li, ~ .x %>%
+                  rename(gene_name = N_unmapped) %>%
+                  slice(-(1:3)) %>%
+                  select(1:2))
+                   
+# Concatenating these newly created dataframes with a loop
+# Initialize an empty data frame to store the result
+STAR_concat <- data.frame(gene_name = character())
+
+# Loop through each data frame in the list
+for (df in STAR_l) {
+  # Perform full join with the current data frame
+  STAR_concat <- full_join(STAR_concat, df, by = "gene_name")
+}
+```
+
+Then, we rename the sample names to make them a bit easier to read and store the result as a .csv file
+
+```{r}
+
+STARnames <- c("1_treated_STAR", "2_treated_STAR", "3_treated_STAR", "4_treated_STAR", "5_treated_STAR", 
+                   "6_untreated_STAR", "7_untreated_STAR", "8_untreated_STAR", "9_untreated_STAR", "10_untreated_STAR" )
+STARnames <- as.character(STARnames)
+renaming_specs2 <- setNames(names(STAR_concat)[-1], STARnames)
+STAR_concat_named <- STAR_concat %>%
+  rename(!!!renaming_specs2)
+write.csv(as.data.frame(STAR_concat_named), 
+          file="/Users/katietaylor/70006/STAR_concat_named.csv")
+```
+
+### RSubread and STAR Counts
+
+We can concatenate the two dataframes together with similar methods. If you don't want to run the entire document to get to this step, just use read_csv to read the tables in.
+
+```{r}
+# Concatenating them both together
+star_rsubread_concat <- full_join(STAR_concat_named, Rsubread_concat_named, by = "gene_name")
+
+# Writing a csv
+write.csv(as.data.frame(star_rsubread_concat), 
+          file="/Users/katietaylor/70006/star_subread_concat.csv")
+```
+
+We can filter at this step, such that our visualization is a bit better.
+
+```{r}
+# Filter the concatenated rows
+star_subread_concat_filtered <- star_rsubread_concat %>%
+  mutate(across(everything(), ~ ifelse(. < 10, NA, .))) %>%
+  filter(rowSums(is.na(.)) < 5)
+```
+
+#### Visualizing comparisons between Rsubread and STAR
+
+The following steps create a box plot to visualize counts generated by RSubread versus STAR.
+
+```{r}
+# Gather columns 2 to 11 into a single column
+df_long <- star_rsubread_concat %>%
+  gather(variable, value, 2:21)
+
+df_long_filtered <- df_long %>%
+  filter(value > 9)
+
+df_long_order <- c("1_treated_STAR", "1_treated_Subread", 
+                   "2_treated_STAR", "2_treated_Subread",
+                   "3_treated_STAR", "3_treated_Subread", 
+                   "4_treated_STAR", "4_treated_Subread", 
+                   "5_treated_STAR", "5_treated_Subread", 
+                   "6_untreated_STAR", "6_untreated_Subread", 
+                   "7_untreated_STAR", "7_untreated_Subread", 
+                   "8_untreated_STAR", "8_untreated_Subread", 
+                   "9_untreated_STAR", "9_untreated_Subread", 
+                   "10_untreated_STAR", "10_untreated_Subread")
+df_long_names <- c("1 treated STAR", "1 treated Subread", 
+                   "2 treated STAR", "2 treated Subread",
+                   "3 treated STAR", "3 treated Subread", 
+                   "4 treated STAR", "4 treated Subread", 
+                   "5 treated STAR", "5 treated Subread", 
+                   "6 untreated STAR", "6 untreated Subread", 
+                   "7 untreated STAR", "7 untreated Subread", 
+                   "8 untreated STAR", "8 untreated Subread", 
+                   "9 untreated STAR", "9 untreated Subread", 
+                   "10 untreated STAR", "10 untreated Subread")
+
+# Reorder and rename levels of the variable column
+df_long_filtered$variable <- factor(df_long_filtered$variable, levels = df_long_order, labels = df_long_names)
+
+# Create a box plot
+ggplot(df_long_filtered, aes(x = variable, y = value)) +
+  geom_boxplot() +
+  labs(x = "Sample", y = "Read Counts") +
+  scale_y_log10() +
+  theme(axis.text.x = element_text(angle = 45, hjust = 1))+
+  theme(legend.position = "none", panel.grid.major = element_blank(),  # Remove major grid lines
+              panel.grid.minor = element_blank(), 
+        panel.background = element_blank(),  # Remove gray background
+        plot.background = element_blank())
+```
+
+The following steps can be completed to create a PCA of the STAR and Subread counts, delineated by both the plate and the
+
+```{r}
+# Create a matrix from our table of counts
+pca_matrix <- star_subread_concat_filtered %>% 
+  # make the "gene" column become the rownames of the table
+  column_to_rownames("gene_name") %>% 
+  # coerce to a matrix
+  as.matrix() %>% 
+  # transpose the matrix so that rows = samples and columns = variables
+  t()
+ 
+# replace NAs with 0s - needed for PCA
+pca_matrix_no_na <- replace(pca_matrix, is.na(pca_matrix), 0)
+
+# Perform the PCA
+sample_pca <- prcomp(pca_matrix_no_na)
+
+#Look at the plot
+autoplot(sample_pca)
+
+# importing 
+mcf7_sample_info <- read_delim("/Users/katietaylor/70006/RNA_DE_mcf7/coldata_mcf7_rna.txt") %>%
+  as.data.frame()
+
+pca_plot <- sample_pca$x %>% # extract the loadings from prcomp
+  # convert to a tibble retaining the sample names as a new column
+  as_tibble(rownames = "ID") %>% 
+  # join with "sample_info" table 
+  full_join(mcf7_sample_info, by = "ID") %>% 
+  # create the plot
+  ggplot(aes(x = PC1, y = PC2, colour = plate, shape = condition)) +
+  geom_point() +
+  ggtitle("STAR & Rsubread PCA")
+
+pca_plot
+
+pca_plot2 <- sample_pca$x %>% # extract the loadings from prcomp
+  # convert to a tibble retaining the sample names as a new column
+  as_tibble(rownames = "ID") %>% 
+  # join with "sample_info" table 
+  full_join(mcf7_sample_info, by = "ID") %>% 
+  # create the plot
+  ggplot(aes(x = PC1, y = PC2, colour = count_generation, shape = condition)) +
+  geom_point()  + 
+  theme(panel.grid.major = element_blank(),  # Remove major grid lines
+              panel.grid.minor = element_blank(), 
+        panel.background = element_blank(),  # Remove gray background
+        plot.background = element_blank())
+
+pca_plot2
+```
+
+### Exploratory analysis
+
+We now are interested in going further with our exploratory analysis with our counts generated by RSubread, so we continue with a 3D PCA plot of these counts. We start with filtering and making the ENS IDs the row anmes
+
+```{r}
+# Filtering Rsubread counts
+Rsubread_concat_filtered <- Rsubread_concat_named %>%
+  mutate(across(everything(), ~ ifelse(. < 10, NA, .))) %>%
+  filter(rowSums(is.na(.)) < 5)
+
+# Making the ensembl IDs the rownames
+rownames(Rsubread_concat_filtered) <- Rsubread_concat_filtered$gene_name
+Rsubread_concat_filter <- Rsubread_concat_filtered %>%
+  select(2:11)
+
+# replace NAs with 0s - needed for PCA
+Rsubread_no_na <- replace(Rsubread_concat_filter, is.na(Rsubread_concat_filter), 0)
+
+# Create a matrix from our table of counts
+pca_matrix_Rsubread <- Rsubread_no_na %>% 
+  # coerce to a matrix
+  as.matrix() %>% 
+  # transpose the matrix so that rows = samples and columns = variables
+  t()
+
+
+```
+
+We now can perform the PCA
+
+```{r}
+# Print the indices of non-numeric elements
+sample_pca_Rsubread <- prcomp(pca_matrix_Rsubread)
+```
+
+And we can add the sample data to this PCA and create a simple 2D PCA plot with ggplot2
+
+```{r}
+# importing 
+mcf7_sample_info_Rsubread <- read_delim("/Users/katietaylor/70006/RNA_DE_mcf7/coldata_Rsubread_mcf7.txt") %>%
+  as.data.frame()
+
+sdev <- sample_pca_Rsubread$sdev
+
+# Calculate variance explained by each PC
+variance_explained <- (sdev^2) / sum(sdev^2) * 100
+
+# Create a data frame for easier handling
+variance_df <- tibble(
+  PC = paste0("PC", seq_along(variance_explained)),
+  VarianceExplained = variance_explained
+)
+
+# Print variance explained
+print(variance_df)
+
+pca_plot_Rsubread <- sample_pca_Rsubread$x %>% 
+  as_tibble(rownames = "ID") %>% 
+  full_join(mcf7_sample_info_Rsubread, by = "ID") %>% 
+  ggplot(aes(x = PC1, y = PC2, color = condition)) +
+  geom_point(size = 7) +
+  ggtitle("Rsubread PCA") +
+  theme(
+    panel.background = element_blank(),
+    # plot.background = element_blank(),  # Uncomment if needed
+    legend.background = element_blank(),
+    legend.box.background = element_blank(),
+    legend.text = element_text(family = "Arial", size = 20, color = "black"),
+    axis.text = element_blank(),         # Remove axis text
+    axis.ticks = element_blank(),        # Remove axis ticks
+    panel.border = element_rect(color = "black", fill = NA, size = 1),  # Add border
+    axis.title.x = element_text(family = "Arial", size = 20, color = "black"),  # Style x-axis title
+    axis.title.y = element_text(family = "Arial", size = 20,  color = "black"), # Style y-axis title
+    plot.title = element_text(family = "Arial", size = 20, color = "black")
+  ) +
+  scale_color_manual(values = c("treated" = "#124E63", "untreated" = "#F6A895"))
+
+# Add titles to axes with `labs()`
+pca_plot_Rsubread <- pca_plot_Rsubread +
+  labs(
+    x = "Principal Component 1 (81.3%)",  # Set x-axis title
+    y = "Principal Component 2 (12.8%)"   # Set y-axis title
+  )
+
+pca_plot_Rsubread
+
+pca_plot_Rsubread2 <- sample_pca_Rsubread$x %>% 
+  as_tibble(rownames = "ID") %>% 
+  full_join(mcf7_sample_info_Rsubread, by = "ID") %>% 
+  ggplot(aes(x = PC3, y = PC4, color = condition)) +
+  geom_point(size = 7) +
+  ggtitle("Rsubread PCA") +
+  theme(
+    panel.background = element_blank(),
+    # plot.background = element_blank(),  # Uncomment if needed
+    legend.background = element_blank(),
+    legend.box.background = element_blank(),
+    legend.text = element_text(family = "Arial", size = 20, color = "black"),
+    axis.text = element_blank(),         # Remove axis text
+    axis.ticks = element_blank(),        # Remove axis ticks
+    panel.border = element_rect(color = "black", fill = NA, size = 1),  # Add border
+    axis.title.x = element_text(family = "Arial", size = 20, color = "black"),  # Style x-axis title
+    axis.title.y = element_text(family = "Arial", size = 20,  color = "black"),   # Style y-axis title
+    plot.title = element_text(family = "Arial", size = 20, color = "black")
+  ) +
+  scale_color_manual(values = c("treated" = "#124E63", "untreated" = "#F6A895"))
+
+# Add titles to axes with `labs()`
+pca_plot_Rsubread2 <- pca_plot_Rsubread2 +
+  labs(
+    x = "Principal Component 3 (3.5%)",  # Set x-axis title
+    y = "Principal Component 4 (1.2%)"   # Set y-axis title
+  )
+
+pca_plot_Rsubread2
+
+ggsave("/Users/katietaylor/70006/Figure170006/PCA_MCF7_PC12_14.png", plot = pca_plot_Rsubread, width = 10, height = 10, units = "in", dpi = 300)
+ggsave("/Users/katietaylor/70006/Figure170006/PCA_MCF7_PC12_14.svg", plot = pca_plot_Rsubread, width = 10, height = 10, units = "in", dpi = 300)
+
+ggsave("/Users/katietaylor/70006/Figure170006/PCA_MCF7_PC34_14.png", plot = pca_plot_Rsubread2, width = 10, height = 10, units = "in", dpi = 300)
+ggsave("/Users/katietaylor/70006/Figure170006/PCA_MCF7_PC34_14.svg", plot = pca_plot_Rsubread2, width = 10, height = 10, units = "in", dpi = 300)
+
+```
+
+Now we can make a 3D PCA plot of this data
+
+```{r}
+library(plotly)
+
+# Extract PCA loadings
+pca_plot_Rsubread <- sample_pca_Rsubread$x %>% 
+  # Convert to a tibble retaining the sample names as a new column
+  as_tibble(rownames = "ID") %>% 
+  # Join with sample info table 
+  full_join(mcf7_sample_info_Rsubread, by = "ID")
+# Ensure 'condition' and 'plate' are treated as a factor
+mcf7_sample_info_Rsubread$condition <- as.factor(mcf7_sample_info_Rsubread$condition)
+# Create 3D PCA plot with plotly
+plot_ly(
+  x = pca_plot_Rsubread$PC1,
+  y = pca_plot_Rsubread$PC2,
+  z = pca_plot_Rsubread$PC3,
+  type = "scatter3d",
+  mode = "markers",
+  marker = list(color = as.integer(mcf7_sample_info_Rsubread$condition),
+                colorscale = list(c(0,1), c("#F6A895", "#124E63"))),
+  text = paste("Condition: ", mcf7_sample_info_Rsubread$condition, "<br>",
+               "Plate: ", mcf7_sample_info_Rsubread$plate),
+  hoverinfo = "text",
+  showlegend = TRUE
+) %>% 
+  layout(
+    scene = list(
+      xaxis = list(title = "PC1"),
+      yaxis = list(title = "PC2"),
+      zaxis = list(title = "PC3")
+    ),
+    title = "Rsubread PCA"
+  )
+```
+
+As we can see, the samples are differentiated by their condition (treated vs untreated) on the 4th PCA.
+
+## Differential expression: DESeq2
+
+First, we set up the metadata as coldata_mcf7, although this comes from the same .csv file as mcf7_sample_info
+
+```{r}
+library(DESeq2)
+
+# importing a coldata dataframe, so that I can delineate treated/untreated 
+coldata_mcf7_rna <- read_delim("/Users/katietaylor/70006/RNA_DE_mcf7/coldata_mcf72.txt") %>%
+  as.data.frame() %>%
+  mutate(row_names = .[[1]], .) %>%  # Create row names and add them as a new column
+  dplyr::select(-1)  # Remove the first column
+
+#Reading Rusbread_concat_named in to avoid issues with naming and deleting columns 
+Rsubread_concat_named <- read_delim(file="/Users/katietaylor/70006/Rsubread_concat_named.csv") %>%
+  as.data.frame()
+
+# Set the created row names and remove the column used for row names
+rownames(coldata_mcf7_rna) <- coldata_mcf7_rna$row_names
+coldata_mcf7_rna <- dplyr::select(coldata_mcf7_rna, -row_names)
+#Selecting for only Subread information
+coldata_mcf7_rna <- head(coldata_mcf7_rna, 10)
+
+#Setting up Rsubread_concat_named
+# My gene ENSIds are in a column, not the row names, so I have to change that
+rownames(Rsubread_concat_named) <- Rsubread_concat_named$gene_name
+Rsubread_concat_named <- Rsubread_concat_named %>%
+  dplyr::select(-gene_name)
+Rsubread_concat_named <- Rsubread_concat_named[, -1]
+
+# Making sure that the column names and the row names match
+print(all(rownames(coldata_mcf7_rna) %in% colnames(Rsubread_concat_named)))
+print(all(rownames(coldata_mcf7_rna) == colnames(Rsubread_concat_named)))
+
+print(coldata_mcf7_rna)
+
+```
+
+### DESeq2 analysis
+
+Making the DESeq2 dataset
+
+```{r}
+dds <- DESeqDataSetFromMatrix(countData = Rsubread_concat_named,
+                              colData = coldata_mcf7_rna,
+                              design = ~ condition)
+
+#Filtering dds - smallest group size given by the number of replicates
+smallestGroupSize <- 5
+keep <- rowSums(counts(dds) >= 10) >= smallestGroupSize
+dds <- dds[keep,]
+
+# Setting the factor level (e.g. treated vs untreated)
+dds$condition <- factor(dds$condition, levels = c("untreated","treated"))
+```
+
+Analyzing with DESeq2
+
+```{r}
+library(apeglm)
+dds <- DESeq(dds)
+resultsNames(dds)
+res <- results(dds, name="condition_treated_vs_untreated")
+resLFC <- lfcShrink(dds, coef="condition_treated_vs_untreated", type="apeglm")
+```
+
+### DESeq2 plotting
+
+#### MA Plots
+
+In this section, we will create some plots assessing the quality of our differential expression analysis. We start with an MA plot, which shows the log fold change plotted against the mean of the normalized counts. Here, we can see some spreading at a lower mean of normalized counts. This indicates that we are getting some over representation of lowly expressed genes.
+
+```{r}
+plotMA(res, ylim=c(-2,2), colNonSig = "#F2D7D5", colSig = "#85C1E9" )
+```
+
+Instead, we can look at the MA plot of the results after undergoing log fold change shrinkage. Here, we can see less of a spread at lower read counts.
+
+```{r}
+plotMA(resLFC, ylim=c(-2,2), colNonSig = "#F2D7D5", colSig = "#85C1E9", 
+       main = "MA Plot - MCF7 Treated vs Untreated with IFNβ")
+```
+
+#### Count data transformations
+
+We would like for our variance to be unbiased by the mean of our data, and we can do this with the blind function, either with vst or with rlog. These two options re-estimate dispersion using only the intercept. The line at the bottom should be as close to flat as possible, so likely VSD will be the correct option for count data transformation.
+
+```{r}
+library("vsn")
+vsd <- vst(dds, blind=FALSE)
+meanSdPlot(assay(vsd))
+rld <- rlog(dds, blind=FALSE) 
+meanSdPlot(assay(rld))
+ntd <- normTransform(dds)
+meanSdPlot(assay(ntd))
+```
+
+We continue to look at these with heatmaps, so we first need to set the metadata as a dataframe "df."
+
+```{r}
+library("pheatmap")
+
+counts <- counts(dds, normalized = TRUE)
+gene_exp_df <- data.frame(geneids = rownames(counts), counts)
+write.csv(data.frame(gene_exp_df), file = "/Users/katietaylor/70006/RNA_DE_mcf7/mcf7_gene_exp.csv", row.names = FALSE)
+design <- as.data.frame(colData(dds))
+select <- order(rowMeans(counts(dds,normalized=TRUE)),
+                decreasing=TRUE)[1:20]
+```
+
+We now can create three heatmaps: one for vsd, one for rld, and one for ntd.
+
+```{r, echo = T, eval = F}
+pheatmap(assay(vsd)[select,], cluster_rows=FALSE, show_rownames=FALSE,
+         cluster_cols=TRUE, annotation_col=df)
+pheatmap(assay(rld)[select,], cluster_rows=FALSE, show_rownames=FALSE,
+         cluster_cols=TRUE, annotation_col=df)
+pheatmap(assay(ntd)[select,], cluster_rows=FALSE, show_rownames=FALSE,
+         cluster_cols=TRUE, annotation_col=df)
+```
+
+We now want to look at the sample-to-sample clustering and sample distances. We can view this with more heatmaps.
+
+#### Heatmaps and PCAs
+
+```{r}
+library("RColorBrewer")
+sampleDists <- dist(t(assay(vsd)))
+sampleDistMatrix <- as.matrix(sampleDists)
+rownames(sampleDistMatrix) <- paste(vsd$condition)
+colnames(sampleDistMatrix) <- paste(vsd$condition)
+colors <- colorRampPalette( rev(brewer.pal(9, "Blues")) )(255)
+pheatmap(sampleDistMatrix,
+         clustering_distance_rows=sampleDists,
+         clustering_distance_cols=sampleDists,
+         col=colors)
+
+```
+
+Here, we can see that the batch effect does not actually make that much of a difference between samples. This is as expected, as we have accounted for our batch effect in our DESeq2 analysis.
+
+We can look more at our samples with a PCA (again).
+
+```{r}
+#plotPCA(vsd, intgroup=c("condition", "batch"))
+plotPCA(vsd, intgroup=c("condition"))
+pcaData <- plotPCA(vsd, intgroup=c("condition"), returnData=TRUE)
+percentVar <- round(100 * attr(pcaData, "percentVar"))
+ggplot(pcaData, aes(PC1, PC2, color=condition)) +
+  geom_point(size=3) +
+  xlab(paste0("PC1: ",percentVar[1],"% variance")) +
+  ylab(paste0("PC2: ",percentVar[2],"% variance")) + 
+  coord_fixed()
+```
+
+Now that we have our data, and we know that it's doing the things we want it to do (clustering via treated vs untreated), we can work a bit more with the data. We start by ordering `resLFC` by the padj. We can then save the results of the adjusted p values that are below 0.05 and see how many there are. We then filter for a fold change of \>1.5 and find the number of those genes. We can then modify the row names of these significant genes and save the table to a .csv files
+
+#### Significant genes
+
+```{r}
+# ordering by adjusted p value
+resOrdered <- res[order(res$padj),]
+# filtering for p value set to 0.05
+res05 <- results(dds, alpha=0.05)
+sum(res$padj < 0.05, na.rm=TRUE)
+# filtering for p value set to 0.05 and lfc > 0.58
+sum(res$padj < 0.05 & abs(res$log2FoldChange) > 0.58, na.rm=TRUE)
+complete_rows <- complete.cases(res$padj, res$log2FoldChange)
+significant_genes <- res[complete_rows & res$padj < 0.05 & abs(res$log2FoldChange) > 0.58, ]
+#significant_genes <- res[res$padj < 0.05 & abs(res$log2FoldChange) > 0.58, na.rm=TRUE]
+
+# Get the gene names that meet the criteria
+gene_names <- rownames(significant_genes)
+gene_names_short <- lapply(gene_names, function(x) gsub("\\.\\d+$", "", x))
+gene_names_short <- unlist(gene_names_short)
+write.csv(data.frame(gene_names_short), file = "/Users/katietaylor/70006/RNA_DE_mcf7/dif_exp_mcf7_genes.csv", row.names = FALSE)
+
+```
+
+#### Volcano plots, heatmaps of significant genes
+
+We start with installing the required package and extracting the required components from our dds object.
+
+sigGenes \<- as.data.frame(shrinkLvV) %\>%
+
+top_n(150, wt=-padj) %\>%
+
+pull("GeneID")
+
+```{r}
+library(DEGreport)
+library(tibble)
+
+# column 
+counts <- counts(dds, normalized = TRUE)
+design <- as.data.frame(colData(dds))
+
+shrinkLvV <- as.data.frame(resLFC) %>%
+  rownames_to_column("GeneID") #%>% 
+  #rename(logFC=log2FoldChange, FDR=padj)
+```
+
+We now can move on with pulling the top 150 genes with the lowest adjusted p values. We continue on with the creation of a heatmap of these top 150 genes.
+
+```{r}
+library(ComplexHeatmap)
+library(circlize)
+library(DESeq2)
+
+# creation of color palette
+myPalette <- c("#124E63", "#FFFEFE", "#F6A895")
+
+"#4F774D"
+"#D7A564"
+"#FFF5F5"
+"#FFDFDD"
+"#FAC3BA"
+"#EEB094"
+"#EBAD8B"
+"#FFE5E4"
+"#F8BDAF"
+"#FFF0F0"
+"#F2B39C"
+myRamp = colorRamp2(c(-2, 0, 2), myPalette)
+# pulling of top 150 genes
+sigGenes <- as.data.frame(shrinkLvV) %>% 
+  top_n(1084, wt=abs(log2FoldChange)) %>% 
+  pull("GeneID")
+plotDat <- vst(dds)[sigGenes,] %>% 
+  assay()
+z.mat <- t(scale(t(plotDat), center=TRUE, scale=TRUE))
+View(z.mat)
+
+#z.mat <- z.mat %>%
+#  rename("1_treated_Subread" = "one")
+ Heatmap(z.mat, name = "z-score",
+        col = myRamp,
+        show_column_names = FALSE,
+        show_row_names = TRUE,
+        cluster_columns = TRUE, 
+        heatmap_height = unit(6, "npc"))
+
+ggsave("/Users/katietaylor/70006/Figure170006/MCF7_top75_heatmap.png", plot = dif_hm, width = 10, height = 20, units = "in", dpi = 300)
+
+png("/Users/katietaylor/70006/Figure170006/MCF7_top75_heatmap.png", width = 800, height = 1600, res = 300)
+print(dif_hm)  # Print the ggplot object
+dev.off()
+
+"#7B8639"
+"#2B675E"
+```
+
+We can move onto the volcano plot. We first create the column variable for -log(10), and then we can plot this against the adjusted p values.
+
+```{r}
+shrinkLvV$log10_padj <- -log10(shrinkLvV$padj)
+# Create a plot with logFC on x-axis and -log10(pvalue) on y-axis
+plot(shrinkLvV$log2FoldChange, shrinkLvV$log10_padj, 
+     xlab = "log2 Fold Change (logFC)", 
+     ylab = "-log10(pvalue)",
+     main = "MCF7 RNA-Seq Volcano Plot",
+     pch = 20,  # Use solid points
+     col = ifelse(res$padj < 0.05, "#175362", "#FAC3BA"))+
+abline(h = -log10(0.05), col = "#FAC3BA", lty = 2) 
+
+```
+
+## Biological significance
+
+#### Biomart
+
+We start with loading biomart and doing some formatting with the results of DESeq2. This includes getting rid of the version number in the column names and making the column names a vector.
+
+```{r}
+library(biomaRt)
+library(stringr)
+
+# creating a new column name with the ensembl name without the version #
+res_df <- as.data.frame(resOrdered, row.names = rownames(resOrdered))
+row_names <- rownames(res_df)
+modified_row_names <- gsub("\\.\\d+$", "", row_names)
+rownames(res_df) <- modified_row_names
+condition_treated_results_mcf7 <- res_df
+
+# making column names a vector
+ensembl_g_id <- modified_row_names
+```
+
+We are now going to call using biomart's functions useEnsembl and ncbi_ID to create a vector of ncbi IDs that correspond to our ensembl IDs.
+
+```{r}
+# calling ensembl ID and using it to create a data frame with ncbi IDs
+ensembl <- useEnsembl(biomart = "genes", dataset = "hsapiens_gene_ensembl", mirror = "www")
+
+ncbi_ID <- getBM(attributes = c("entrezgene_id", "ensembl_gene_id"),
+      filters = "ensembl_gene_id", 
+      values = ensembl_g_id, 
+      mart = ensembl)
+
+
+# calling gene names
+hgnc_ID <- getBM(attributes = c("ensembl_gene_id", "hgnc_symbol"),
+      filters = "ensembl_gene_id", 
+      values = ensembl_g_id, 
+      mart = ensembl)
+
+```
+
+We now modify the condition_treated_results_mcf7 object, such that we can add in the ncbi_IDs vector as a column.
+
+```{r}
+# converting rownames to a column named "ensembl_gene_id"
+condition_treated_results_mcf7 <- condition_treated_results_mcf7 %>%
+  tibble::rownames_to_column(var = "ensembl_gene_id")
+
+#joining the ncbi_ID with condition_treated_results_mcf7
+condition_treated_results_mcf7 <- full_join(condition_treated_results_mcf7, ncbi_ID, by = "ensembl_gene_id")
+
+condition_treated_results_mcf7 <- full_join(condition_treated_results_mcf7, hgnc_ID, by = "ensembl_gene_id")
+
+```
+
+We can now filter for significance and save as .csv files, so that we can access a bit later
+
+```{r}
+# upregulated genes
+sig_genes_ncbi_up <- condition_treated_results_mcf7 %>%
+  dplyr::filter(padj < 0.05) %>%
+  dplyr::select(entrezgene_id)
+write.csv(sig_genes_ncbi_up, 
+          file="/Users/katietaylor/70006/RNA_DE_mcf7/mcf7_RNA_results_up_IDs.csv")
+sig_genes_ncbi_up_res <- condition_treated_results_mcf7 %>%
+  dplyr::filter(padj < 0.05)
+write.csv(sig_genes_ncbi_up_res, 
+          file="/Users/katietaylor/70006/RNA_DE_mcf7/mcf7_RNA_results_up.csv")
+# downreulated genes
+sig_genes_ncbi_down <- condition_treated_results_mcf7 %>%
+  dplyr::filter(padj < 0.05) %>%
+  dplyr::select(entrezgene_id)
+write.csv(sig_genes_ncbi_down, 
+          file="/Users/katietaylor/70006/RNA_DE_mcf7/mcf7_RNA_results_down_IDs.csv")
+sig_genes_ncbi_down_res <- condition_treated_results_mcf7 %>%
+  dplyr::filter(padj < 0.05)
+
+write.csv(sig_genes_ncbi_down_res, 
+          file = "/Users/katietaylor/70006/RNA_DE_mcf7/mcf7_RNA_results_down.csv")
+# all genes - control for Panther
+all_genes_ncbi <- condition_treated_results_mcf7 %>%
+  dplyr::select(entrezgene_id)
+write.csv(all_genes_ncbi, 
+          file="/Users/katietaylor/70006/RNA_DE_mcf7/mcf7_RNA_results_all_IDs.csv")
+write.csv(condition_treated_results_mcf7, 
+          file="/Users/katietaylor/70006/RNA_DE_mcf7/mcf7_RNA_results_all.csv")
+
+write.csv(condition_treated_results_mcf7, 
+          file="/Users/katietaylor/70006/RNA_DE_mcf7/mcf7_RNA_results_all_hgnc.csv")
+
+
+```
+
+#### Comparing to Izzy's results
+
+```{r}
+izzy_mcf7_rna_de <- read.csv(file = "/Users/katietaylor/Downloads/MCF7_allGene_DESeq2_TREATED_RNA_CONTROL_RNA_V2.csv", header = TRUE, sep = "\t")
+
+print(head(izzy_mcf7_rna_de))
+
+library("GeneStructureTools")
+
+izzy_mcf7_rna_de <- izzy_mcf7_rna_de %>%
+  mutate(ids = removeVersion(GeneID))
+
+print(head(izzy_mcf7_rna_de))
+
+write.csv(izzy_mcf7_rna_de, 
+          file="/Users/katietaylor/Downloads/MCF7_allGene_DESeq2_TREATED_RNA_CONTROL_RNA_V2_ids.csv")
+```
+
+### Gene Set Enrichment Analysis
+
+```{r}
+if (!require("BiocManager", quietly = TRUE))
+    install.packages("BiocManager")
+
+BiocManager::install("fgsea")
+library(fgsea)
+library(fgsea)
+library(dplyr)
+library(data.table)
+library(ggplot2)
+```
+
+Reading in my deseq DE file
+
+```{r}
+data <- read.csv("/Users/katietaylor/70006/RNA_DE_mcf7/mcf7_RNA_results_all_hgnc.csv")
+print(data)
+gseaDat <- dplyr::filter(data, !is.na(entrezgene_id))
+print(gseaDat)
+rankData <- gseaDat$log2FoldChange
+names(rankData) <- gseaDat$entrezgene_id
+head(rankData)
+```
+
+Loading the human MSigDB hallmark gene set
+
+```{r}
+pathways.hallmark <- gmtPathways("/Users/katietaylor/Downloads/hallmark_gsea.gmt")
+data(examplePathways)
+set.seed(42)
+fgseaRes <- fgsea(pathways = pathways.hallmark, 
+                  stats = rankData, 
+                  minSize=15, 
+                  maxSize = 500)
+head(fgseaRes[order(pval), ])
+plotEnrichment(pathways.hallmark[["HALLMARK_INTERFERON_ALPHA_RESPONSE"]], rankData)
+createGSEAinput(prefix = "GSE1009", exprSet = example_exprSet, group_list,
+  destdir = ".")
+```
+
+### Ontologies
+
+#### GOseq
+
+```{r}
+if (!require("BiocManager", quietly = TRUE))
+    install.packages("BiocManager")
+
+BiocManager::install("goseq")
+library(goseq)
+```
+
+```{r}
+supportedOrganisms() %>% filter(str_detect(Genome, "mm"))
+```
+
+#### Gene Set Enrichment
+
+#### GSEA
+
+We start by loading the normalized count data that we saved earlier and converting the ensembl IDs to entrez gene ids
+
+```{r}
+gsea <- read.csv("/Users/katietaylor/70006/RNA_DE_mcf7/mcf7_gene_exp.csv")
+library("GeneStructureTools")
+
+gsea <- gsea %>%
+  mutate(geneids = removeVersion(geneids))
+# making column names a vector
+ensembl_g_id <- gsea["geneids"]
+
+# calling ensembl ID and using it to create a data frame with ncbi IDs
+ensembl <- useEnsembl(biomart = "genes", dataset = "hsapiens_gene_ensembl", mirror = "www")
+
+ncbi_ID <- getBM(attributes = c("entrezgene_id", "ensembl_gene_id"),
+      filters = "ensembl_gene_id", 
+      values = ensembl_g_id, 
+      mart = ensembl)
+
+
+# calling gene names
+hgnc_ID <- getBM(attributes = c("ensembl_gene_id", "hgnc_symbol"),
+      filters = "ensembl_gene_id", 
+      values = geneids, 
+      mart = ensembl)
+
+gsea <- gsea %>% 
+  rename("ensembl_gene_id" = "ensembl_g_id")
+
+#joining the ncbi_ID with condition_treated_results_mcf7
+gsea <- full_join(gsea, ncbi_ID, by = "ensembl_gene_id")
+
+gsea <- full_join(gsea, hgnc_ID, by = "ensembl_gene_id")
+
+write.csv(gsea, 
+          file="/Users/katietaylor/Downloads/gsea_ncbi_hgnc.csv")
+```
+
+#### GSALightning
+
+```{r}
+library(devtools) 
+install_github("billyhw/GSALightning")
+library(GSALightning)
+```
+
+Sample data
+
+```{r}
+data(sampleInfo)
+data("targetGenes")
+```
+
+remove genes with 0 sample variance and ran
+
+```{r}
+expression <- expression[apply(expression,1,sd) != 0,]
+GSALightResults <- GSALight(eset = expression, fac = factor(sampleInfo$TN), gs = targetGenes, 
+                           nperm = 1000, minsize = 10, rmGSGenes = 'gene')
+head(GSALightResults)
+```
+
+### Gene ontology
+
+#### gProfiler
+
+gProfiler was used to create the list linked below from the list of differentially expressed genes.
+
+```{r}
+#gprofile_mcf7 <- read.csv("/Users/katietaylor/Downloads/isgverse_up/isgverse_up_genewalk_results.csv") # ISGverseup
+#gprofile_mcf7 <- read.csv("/Users/katietaylor/Downloads/gProfiler_hsapiens_4-27-2024_12-50-50 PM__intersections.csv") # ISGverseup
+#gprofile_mcf7 <- read.csv("/Users/katietaylor/Downloads/gProfiler_hsapiens_4-28-2024_8-29-24 AM__intersections.csv") # ISGversedown
+genewalk_mcf7 <- read.csv("/Users/katietaylor/Downloads/genewalk/mcf7_up/genewalk_results.csv") # up genewalk
+gprofile_mcf7 <- read.csv("/Users/katietaylor/Downloads/gProfiler_hsapiens_4-25-2024_3-31-38 PM__intersections.csv") # up p<0.01
+#gprofile_mcf7 <- read.csv("/Users/katietaylor/Downloads/gProfiler_hsapiens_4-25-2024_3-25-49 PM__intersections.csv") # down p<0.05
+#gprofile_mcf7 <- read.csv("/Users/katietaylor/Downloads/gProfiler_hsapiens_4-25-2024_3-13-45 PM__intersections.csv") # up p<0.05
+print(head(gprofile_mcf7))
+```
+
+#### GProfiler
+
+We want to be able to run gprofiler in R, so that we can run it quickly for all of the rest of the datasets, so we install gprofiler and load the packages.
+
+```{r}
+#install.packages("gprofiler2")
+library("gprofiler2")
+```
+
+We want to set our background file for mcf7, so we read in Rsubread concat and remove any rows that have less than five columns with greater than 10 reads.
+
+```{r}
+library(dplyr)
+library(readr)
+library(biomaRt)
+library("GeneStructureTools")
+mcf7_bg <- read_delim(file="/Users/katietaylor/70006/Rsubread_concat_named.csv") %>%
+  as.data.frame()
+
+smallestGroupSize <- 5
+keep <- rowSums(mcf7_bg >= 10) >= smallestGroupSize
+mcf7_bg <- mcf7_bg[keep,]
+
+
+mcf7_bg <- mcf7_bg %>%
+  mutate(ids = removeVersion(gene_name))
+
+mcf7_bg <- mcf7_bg %>% rename(ensembl_gene_id = ids)
+mcf7_bg_list <- mcf7_bg$ensembl_gene_id
+print(mcf7_bg_list)
+ensembl <- useEnsembl(biomart = "genes", dataset = "hsapiens_gene_ensembl", mirror = "www")
+mcf7_hgnc_bg_list <- getBM(attributes = c("ensembl_gene_id", "hgnc_symbol"),
+      filters = "ensembl_gene_id", 
+      values = mcf7_bg_list, 
+      mart = ensembl)
+mcf7_hgnc_bg_list$ensembl_gene_id <- as.character(mcf7_hgnc_bg_list$ensembl_gene_id)
+mcf7_bg$ensembl_gene_id <- as.character(mcf7_bg$ensembl_gene_id)
+mcf7_bg <- full_join(mcf7_bg, mcf7_hgnc_bg_list, by = "ensembl_gene_id")
+mcf7_name_bg <- unlist(mcf7_bg["hgnc_symbol"])
+```
+
+We now want to run `gost` on our DE lists
+
+```{r}
+#query <- read_csv("/Users/katietaylor/Downloads/mcf7_up/MCF7_up_DE.csv") %>%
+#  as.data.frame()
+#query <- read_csv("/Users/katietaylor/70006/ISGverse/isgsdown.csv") %>%
+#  as.data.frame()
+query <- read_csv("/Users/katietaylor/Downloads/mcf7_results_sig_hgnc.csv") %>%
+  as.data.frame()
+query <- query %>%
+  dplyr::filter(log2FoldChange > 0)
+query <- unlist(query["ensembl_gene_id"])
+#print(query) #quality check
+gostres <- gost(query = query, 
+                organism = "hsapiens", ordered_query = TRUE, 
+                multi_query = FALSE, significant = TRUE, exclude_iea = FALSE, 
+                measure_underrepresentation = FALSE, evcodes = TRUE, 
+                user_threshold = 0.05, correction_method = "g_SCS", 
+                domain_scope = "annotated", custom_bg = mcf7_name_bg, #NULL,  
+                numeric_ns = "", sources = c("GO:BP", "GO:CC", "KEGG", "REAC"), as_short_link = FALSE, highlight = FALSE)
+res <- gostres$result
+View(res)
+```
+
+#### Panther
+
+```{r, eval=F}
+library(AnnotationHub)
+ah <- AnnotationHub()
+query(ah, "PANTHER.db")[[1]]
+library("PANTHER.db")
+PANTHER.db
+availablePthOrganisms(PANTHER.db)[1:5,]
+pthOrganisms(PANTHER.db) <- "HUMAN"
+PANTHER.db
+columns(PANTHER.db)
+```
+
+We want to set the organism to "human" for panther, so we do so and look at the PANTHER.db again. We can also observe the columns and keytypes for PANTHER.db
+
+```{r, eval = F}
+pthOrganisms(PANTHER.db) <- "HUMAN"
+PANTHER.db
+columns(PANTHER.db)
+keytypes(PANTHER.db)
+```
+
+#### rrvigo
+
+We can visualize this more generally with the rrvigo package, but we are most
+
+```{r}
+library("rrvgo")
+library("org.Hs.eg.db")
+library(dplyr)
+library(ggrepel)
+library(pheatmap)
+go_analysis <- read.delim(system.file("extdata/example.txt", package="rrvgo"))
+print(go_analysis)
+
+#gprofiler
+simMatrix <- calculateSimMatrix(res$term_id,
+                                orgdb="org.Hs.eg.db",
+                                ont="BP",
+                                method="Rel")
+
+#simMatrix <- calculateSimMatrix(gprofile_mcf7$term_id,
+#                                orgdb="org.Hs.eg.db",
+#                                ont="BP",
+#                                method="Rel")
+scores <- setNames(-log10(res$p_value),res$term_id)
+#scores <- setNames(-log10(gprofile_mcf7$adjusted_p_value),gprofile_mcf7$term_id)
+
+reducedTerms <- reduceSimMatrix(simMatrix,
+                                scores,
+                                threshold=0.5,
+                                orgdb="org.Hs.eg.db")
+
+heatmapPlot(simMatrix,
+            reducedTerms,
+            annotateParent=TRUE,
+            annotationLabel="parentTerm",
+            fontsize=4)
+reducedTerms$parentTerm <- factor(reducedTerms$parentTerm)
+pheatmap(simMatrix,
+         annotation_col = reducedTerms,
+         annotation_colors = list(parentTerm = rainbow(length(unique(reducedTerms$parentTerm)))),
+         fontsize = 4)
+scatterPlot(simMatrix, reducedTerms, labelSize = 2)
+treemapPlot(reducedTerms)
+print(reducedTerms)
+
+#genewalk
+#regulators <- read.csv("/Users/katietaylor/Downloads/isgverse_up/figures/genewalk_regulators.csv")
+
+#genewalk_mcf7 <- genewalk_mcf7 %>% arrange(desc(global_padj))
+#genewalk_mcf7 <- genewalk_mcf7 %>% distinct(go_id, .keep_all = TRUE)
+
+#simMatrix <- calculateSimMatrix(genewalk_mcf7$go_id,
+#                                orgdb="org.Hs.eg.db",
+#                                ont="BP",
+#                                method="Rel")
+#scores <- setNames(-log10(genewalk_mcf7$global_padj),genewalk_mcf7$go_id)
+#reducedTerms <- reduceSimMatrix(simMatrix,
+#                                scores,
+#                                threshold=0.9,
+#                                orgdb="org.Hs.eg.db")
+
+#heatmapPlot(simMatrix,
+#            reducedTerms,
+#            annotateParent=TRUE,
+#            annotationLabel="parentTerm",
+#            fontsize=4)
+#scatterPlot(simMatrix, reducedTerms, labelSize = 3)
+#treemapPlot(reducedTerms)
+#print(reducedTerms)
+#write.csv(reducedTerms, 
+#          file="/Users/katietaylor/Downloads/isgverse_up/genewalk_rrvigo.csv")
+```
+
+## Genewalk
+
+```{r}
+res_g <- read.csv("/Users/katietaylor/Downloads/genewalk/mcf7_up/genewalk_results.csv")
+simMatrix <- calculateSimMatrix(res_g$go_id,
+                                orgdb="org.Hs.eg.db",
+                                ont="BP",
+                                method="Rel")
+
+#simMatrix <- calculateSimMatrix(gprofile_mcf7$term_id,
+#                                orgdb="org.Hs.eg.db",
+#                                ont="BP",
+#                                method="Rel")
+scores <- setNames(-log10(res_g$global_padj),res_g$go_id)
+#scores <- setNames(-log10(gprofile_mcf7$adjusted_p_value),gprofile_mcf7$term_id)
+
+reducedTerms <- reduceSimMatrix(simMatrix,
+                                scores,
+                                threshold=0.7,
+                                orgdb="org.Hs.eg.db")
+
+heatmapPlot(simMatrix,
+            reducedTerms,
+            annotateParent=FALSE,
+            annotationLabel="parentTerm",
+            fontsize=4)
+library(pheatmap)
+library(ComplexHeatmap)
+library(circlize)
+# Generate heatmap
+myPalette <- c("#943126", "#FDF2E9", "#423D8C")
+myRamp = colorRamp2(c(-2, 0, 2), myPalette)
+pheatmap(
+  simMatrix, color = c("#9A9132", "#D7A564", "#FFF5F5", "#FAC3BA","#356C5A")
+)
+reducedTerms$parentTerm <- factor(reducedTerms$parentTerm)
+pheatmap(simMatrix,
+         annotation_col = reducedTerms,
+         annotation_colors = list(parentTerm = rainbow(length(unique(reducedTerms$parentTerm)))),
+         fontsize = 4)
+library(ggplot2)
+
+# Assuming you have the similarity matrix (simMatrix) 
+# and information about the terms (reducedTerms)
+
+# Create a data frame with relevant information
+data <- data.frame(term1 = rownames(simMatrix), 
+                   term2 = colnames(simMatrix),
+                   score = unlist(simMatrix))  # Unlist matrix for scores
+
+# Define your desired color palette
+colors <- c("#9A9132", "#D7A564", "#FFF5F5", "#FAC3BA","#356C5A")  # Adjust colors as needed
+
+# Create the scatter plot
+p <- ggplot(data, aes(x = term1, y = term2, color = score)) +
+  geom_point(aes(size = score), alpha = 0.5) +
+  scale_color_gradient2(name = "Similarity Score", low = "#356C5A", 
+                       high = "#FAC3BA", mid = "#FFF5F5") +  # Color based on score
+  scale_size_area(guide = FALSE) +  # Adjust size based on score (optional)
+  labs(title = "", x = "Term 1", y = "Term 2")  # Adjust labels and title as needed
+
+# Print the plot
+print(p)
+
+
+
+scatterPlot(simMatrix, reducedTerms, algorithm = "pca", onlyParents = TRUE, labelSize = 6, addLabel = TRUE) 
+treemapPlot(reducedTerms)
+print(reducedTerms)
+```
+
+## Comparison with ISGverse
+
+```{r}
+library(ggvenn)
+
+mcf7 <- read_csv("/Users/katietaylor/Downloads/mcf7_results_sig_hgnc.csv")
+
+isgverse <- read_csv("/Users/katietaylor/70006/ISGs_with_score.csv")
+
+mcf7_l <- unique(mcf7$ensembl_gene_id)  # Ensure unique values
+isg_l <- unique(isgverse$geneid)        # Ensure unique values
+
+# Create a named list of sets
+venn_l <- list(
+  mcf7_genes = mcf7_l,
+  isg_genes = isg_l
+)
+
+# Create the Venn diagram
+venn_plot <- ggvenn(data = venn_l, 
+       show_percentage = FALSE, 
+       fill_color = c("#124E63", "#F6A895"), 
+       set_name_color = "black", 
+       stroke_size = 0.05, 
+       stroke_color = "white", 
+       text_size = 6)
+venn_plot + theme(
+  text = element_text(family = "Arial"),  # Set font family to Arial
+  plot.title = element_text(family = "Arial"),
+  legend.text = element_text(family = "Arial")
+)
+
+```
+
+## Reactome Plotting
+
+```{r}
+library(pheatmap)
+library(tidyr)
+library(tibble)
+```
+
+```{r}
+reac_mcf7_up <- read_csv("/Users/katietaylor/70006/mcf7_up_reactome.csv")
+reac_mcf7_down <- read_csv("/Users/katietaylor/70006/mcf7_down_reactome.csv")
+
+View(reac_mcf7_up)
+
+reac_mcf7_up <- reac_mcf7_up %>%
+  dplyr::rename(upregulation_FDR = "Entities FDR") %>%
+  dplyr::select(`Pathway identifier`, `Pathway name`, upregulation_FDR)
+reac_mcf7_down <- reac_mcf7_down %>%
+  dplyr::rename(downregulation_FDR = "Entities FDR") %>%
+  dplyr::select(`Pathway identifier`, `Pathway name`, downregulation_FDR)
+
+reac_mcf7 <- full_join(reac_mcf7_up, reac_mcf7_down, by = c("Pathway identifier", "Pathway name"))
+
+reac_mcf7 <- reac_mcf7 %>%
+  dplyr::filter(upregulation_FDR <= 0.05 | downregulation_FDR <= 0.05)
+
+data <- reac_mcf7 %>%
+  mutate(across(starts_with("upregulation_FDR"), ~ replace_na(., 1))) %>%
+  mutate(across(starts_with("downregulation_FDR"), ~ replace_na(., 1)))
+
+# Prepare the matrix for pheatmap
+heatmap_data <- data %>%
+  dplyr::select(`Pathway name`, upregulation_FDR, downregulation_FDR) %>%
+  column_to_rownames(var = "Pathway name") %>%
+  as.matrix()
+
+# Transform FDR to -log10(FDR) for better visualization
+heatmap_data <- -log10(heatmap_data)
+
+# Print the heatmap data
+print(heatmap_data)
+
+pheatmap(heatmap_data, 
+         cluster_rows = FALSE, 
+         cluster_cols = FALSE, 
+         display_numbers = FALSE, 
+         fontsize_number = 10,
+         col = colors,
+         main = "Pathway FDR Heatmap")
+
+myPalette <- c("#124E63", "#FFFEFE", "#F6A895")
+
+# Create the ramp function
+myRamp = colorRamp2(c(0, 1, 13), myPalette)
+myRamp = colorRamp2(c(0, 1, 13), myPalette)
+
+data_range <- range(heatmap_data, na.rm = TRUE)
+color_breaks <- seq(data_range[1], data_range[2], length.out = 100)
+colors <- myRamp(color_breaks)
+
+values <- seq(0, 13, length.out = 100)
+
+# Apply the ramp function to the values to get the corresponding colors
+colors <- myRamp(values)
+
+# Plot the colors using base R
+image(1:length(values), 1, as.matrix(1:length(values)), col=colors, axes=FALSE, xlab="", ylab="")
+title("Color Ramp Visualization")
+
+```
+
+## Quarto
+
+Quarto enables you to weave together content and executable code into a finished document. To learn more about Quarto see <https://quarto.org>.
