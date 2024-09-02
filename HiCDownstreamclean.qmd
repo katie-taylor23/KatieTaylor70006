@@ -1,0 +1,234 @@
+---
+title: "Hi-C Downstream"
+format: html
+editor: visual
+---
+
+# Differential Interactions
+
+```{r}
+library(HiCcompare)
+```
+
+#### 40 kb
+
+```{r}
+
+####### 40k resolution #########
+
+# reading in the matrices for treated and untreated samples and converting to HicCompare objects
+
+TR_mat <- read.table("/Users/katietaylor/70006/HIC/4000_mat/40000/TR_40000.matrix")
+TR_bed <- read.table("/Users/katietaylor/70006/HIC/4000_mat/40000/TR_40000_abs.bed")
+TR_dat <- hicpro2bedpe(TR_mat, TR_bed)
+dat1 <- TR_dat$cis
+
+WT_mat <- read.table("/Users/katietaylor/70006/HIC/4000_mat/40000/WT_40000.matrix")
+WT_bed <- read.table("/Users/katietaylor/70006/HIC/4000_mat/40000/WT_40000_abs.bed")
+WT_data <- hicpro2bedpe(WT_mat, WT_bed)
+dat2 <- WT_data$cis
+
+# creating a hic table
+
+hic.list <- mapply(create.hic.table, dat1, dat2, SIMPLIFY = FALSE)
+
+# loess noramlization
+hic.table <- hic_loess(hic.list, Plot = TRUE, Plot.smooth = FALSE)
+
+# differentials
+
+hic.table <- hic_compare(hic.table, A.min = 10, adjust.dist = TRUE, p.method = 'fdr', Plot = TRUE)
+
+# combining all chromosomes
+
+dif_hic_allchr <- bind_rows(hic.table)
+
+dif_hic_allchr <- dif_hic_allchr %>%
+  dplyr::filter(p.adj <= 0.05)
+
+# writing to csv
+
+write_csv(dif_hic_allchr, "/Users/katietaylor/70006/HIC/diff_hiccompare40k.csv")
+
+IntSet <- make_InteractionSet(hic.table[[1]])
+
+
+MD_composite(rao2017, plot.chr = 1, D.range = 0.4)
+```
+
+#### 20 kb
+
+```{r}
+####### 20k resolution #########
+
+# reading in hicpro files and creating hiccompare objects
+
+TR_mat <- read.table("/Users/katietaylor/70006/HIC/20k/20000/TR_20000.matrix")
+TR_bed <- read.table("/Users/katietaylor/70006/HIC/20k/20000/TR_20000_abs.bed")
+TR_dat <- hicpro2bedpe(TR_mat, TR_bed)
+dat1 <- TR_dat$cis
+
+WT_mat <- read.table("/Users/katietaylor/70006/HIC/20k/20000/WT_20000.matrix")
+WT_bed <- read.table("/Users/katietaylor/70006/HIC/20k/20000/WT_20000_abs.bed")
+WT_data <- hicpro2bedpe(WT_mat, WT_bed)
+
+# only used cis interations per hiccompare requirements
+dat2 <- WT_data$cis
+
+# created hic table
+
+hic.list <- mapply(create.hic.table, dat1, dat2, SIMPLIFY = FALSE)
+
+# loess normalization
+
+hic.table <- hic_loess(hic.list, Plot = TRUE, Plot.smooth = FALSE)
+
+# differential analysis 
+
+hic.table <- hic_compare(hic.table, A.min = 10, adjust.dist = TRUE, p.method = 'fdr', Plot = TRUE)
+
+# combining all chromosomes
+
+dif_hic_allchr <- bind_rows(hic.table)
+
+dif_hic_allchr <- dif_hic_allchr %>%
+  dplyr::filter(p.adj <= 0.05)
+
+# writing to csv file
+
+write_csv(dif_hic_allchr, "/Users/katietaylor/70006/HIC/diff_hiccompare20k.csv")
+```
+
+# Significant Interactions
+
+#### 40 kb
+
+```{bash}
+# Treated
+/Users/katietaylor/mambaforge/envs/fithic/utils/HiCPro2FitHiC.py -i TR_40000.matrix -b TR_40000_abs.bed -s TR_40000_iced.matrix.biases -o FITHIC_TR -r 40000
+
+# Wild type
+/Users/katietaylor/mambaforge/envs/fithic/utils/HiCPro2FitHiC.py -i WT_40000.matrix -b WT_40000_abs.bed -s WT_40000_iced.matrix.biases -o FITHIC_WT -r 40000
+```
+
+```{bash}
+# Treated
+fithic -f fithic.fragmentMappability.gz -i fithic.interactionCounts.gz -o /Users/katietaylor/70006/HIC/40k/40000/FITHIC_TR -r 40000 -t fithic.biases.gz -x 'intraOnly' -p 2 -b 100 -U 2500000 -L 25000 -v 
+
+# Wild type
+fithic -f fithic.fragmentMappability.gz -i fithic.interactionCounts.gz -o /Users/katietaylor/70006/HIC/40k/40000/FITHIC_WT -r 40000 -t fithic.biases.gz -x 'intraOnly' -p 2 -b 100 -U 2500000 -L 25000 -v
+```
+
+#### 20 kb
+
+```{bash}
+{bash, eval = FALSE}
+# Treated
+/Users/katietaylor/mambaforge/envs/fithic/utils/HiCPro2FitHiC.py -i TR_20000.matrix -b TR_20000_abs.bed -s TR_20000_iced.matrix.biases -o FITHIC_TR -r 20000
+
+# Wild type
+/Users/katietaylor/mambaforge/envs/fithic/utils/HiCPro2FitHiC.py -i WT_20000.matrix -b WT_20000_abs.bed -s WT_20000_iced.matrix.biases -o FITHIC_WT -r 20000
+```
+
+```{bash}
+
+# Treated
+fithic -f fithic.fragmentMappability.gz -i fithic.interactionCounts.gz -o /Users/katietaylor/70006/HIC/20k/20000/FITHIC_TR -r 20000 -t fithic.biases.gz -x 'intraOnly' -p 2 -b 100 -U 2500000 -L 25000 -v 
+
+# Wild type
+fithic -f fithic.fragmentMappability.gz -i fithic.interactionCounts.gz -o /Users/katietaylor/70006/HIC/20k/20000/FITHIC_WT -r 20000 -t fithic.biases.gz -x 'intraOnly' -p 2 -b 100 -U 2500000 -L 25000 -v
+```
+
+# Topologically associated domains (TADs)
+
+All of the following code was run on the HPC
+
+TADs were called and plotted at a resolution of 40 kb
+
+#### Calling TADs
+
+```{bash}
+# calling TADs
+#PBS -l walltime=24:00:00
+#PBS -l select=1:ncpus=8:mem=96gb
+#PBS -J 1-2
+# Load appropriate modules
+module load HICEXPLORE/3.7.2
+
+# Set working directory
+cd $PBS_0_WORKDIR
+
+input="/rds/general/user/kmt23/ephemeral/data/HICJUN4/hic_results/matrix"
+list='/rds/general/user/kmt23/home/jobs/array_lists/hicexploreconvert.txt'
+fq_1=$(awk -v taskID=${PBS_ARRAY_INDEX} '$1==taskID {print $2}' ${list})
+fq_2=$(awk -v taskID=${PBS_ARRAY_INDEX} '$1==taskID {print $3}' ${list})
+fq_3=$(awk -v taskID=${PBS_ARRAY_INDEX} '$1==taskID {print $4}' ${list})
+inp=${input}/${fq_1}
+
+echo ${fq_1}
+
+hicFindTADs -m ${fq_1}.h5 --outPrefix ${fq_3} --correctForMultipleTesting fdr
+```
+
+#### Differential TADs
+
+```{bash}
+# calling TADs, visualizing TADs, calling differential TADs
+#PBS -l walltime=24:00:00
+#PBS -l select=1:ncpus=8:mem=96gb
+# Load appropriate modules
+module load HICEXPLORE/3.7.2
+
+# Set working directory
+cd $PBS_0_WORKDIR
+
+
+hicDifferentialTAD -tm ~/jobs/hicexplorer/TR_40000_iced.matrix.h5 -cm ~/jobs/hicexplorer/WT_40000_iced.matrix.h5 -td ~/jobs/hicexplorer/TR_40000_domains.bed -o ~/jobs/hicexplorer/40000_iced_diff_TAD
+```
+
+#### Plotting TADs
+
+```{bash}
+# calling TADs, visualizing TADs, calling differential TADs
+#PBS -l walltime=24:00:00
+#PBS -l select=1:ncpus=8:mem=32gb
+
+# Load appropriate modules
+module load HICEXPLORE/3.7.2
+
+# Set working directory
+cd $PBS_0_WORKDIR
+
+hicPlotTADs --tracks ~/jobs/hicexplorer/tracks_aug8genetads.ini --region chr12:111863575-113863575 -t 'OAS1 TADS' -o ~/jobs/hicexplorer/OAS1TADS.pdf
+
+hicPlotTADs --tracks ~/jobs/hicexplorer/tracks_aug8genetads.ini --region chr6:105114500-110114500 -t 'FOXO3 TADS' -o ~/jobs/hicexplorer/FOXO3TADS.pdf
+
+hicPlotTADs --tracks ~/jobs/hicexplorer/tracks_aug8genetads.ini --region chr2:64378537-66378537 -t 'MEIS1 TADS' -o ~/jobs/hicexplorer/MEIS1TADS.pdf
+
+hicPlotTADs --tracks ~/jobs/hicexplorer/tracks_aug8genetads.ini --region chr6:34281474-36281474 -t 'TEAD3 TADS' -o ~/jobs/hicexplorer/TEAD3TADS.pdf
+
+hicPlotTADs --tracks ~/jobs/hicexplorer/tracks_aug8genetads.ini --region chr14:23222323-25222323 -t 'IRF9 TADS' -o ~/jobs/hicexplorer/IRF9TADS.pdf
+
+hicPlotTADs --tracks ~/jobs/hicexplorer/tracks_aug8genetads.ini --region chr12:106114500-109114500 -t 'FOXO3 TADS' -o ~/jobs/hicexplorer/12ranTADS.pdf
+```
+
+## Quarto
+
+Quarto enables you to weave together content and executable code into a finished document. To learn more about Quarto see <https://quarto.org>.
+
+## Running Code
+
+When you click the **Render** button a document will be generated that includes both content and the output of embedded code. You can embed code like this:
+
+```{r}
+1 + 1
+```
+
+You can add options to executable code like this
+
+```{r}
+#| echo: false
+2 * 2
+```
+
+The `echo: false` option disables the printing of code (only output is displayed).
