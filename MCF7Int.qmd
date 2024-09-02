@@ -1,0 +1,3763 @@
+---
+title: "MCF7 Interaction Integration"
+format: html
+editor: visual
+---
+
+## FitHiC2 Significant Interactions
+
+### Differential peaks
+
+#### 20 kb
+
+```{r}
+###### FITHIC ###########
+
+# read in significant TREATED interactions
+
+hicTR <- read_delim("/rds/general/ephemeral/user/kmt23/ephemeral/data/concat/FitHiC.spline_pass2.res20000.significances.txt")
+
+# renaming is necessary for filtering
+hicTRsig <- hicTR %>%
+  dplyr::rename(pvalue = 'p-value') %>%
+  dplyr::rename(qvalue = 'q-value') %>%
+  dplyr::filter(qvalue <= 0.05)
+
+# setting up ids, so that I can split the two parts of interaction apart and annotate them
+hicTRsig$id1 <- paste0("KTsInt", 1:nrow(hicTRsig))
+hicTRsig$id2 <- paste0("KTsInt", 1:nrow(hicTRsig))
+
+# splitting the two parts of the interaction apart
+hicTRsigA <- hicTRsig %>%
+  dplyr::select(chr1, fragmentMid1, id1)
+hicTRsigB <- hicTRsig %>%
+  dplyr::select(chr2, fragmentMid2, id2)
+
+# expanding the midpoint of the fragment to achieve the 20kb resolution
+hicTRsigA <- hicTRsigA %>%
+  dplyr::mutate(start1 = fragmentMid1 - 10000) %>%
+  dplyr::mutate(end1 = fragmentMid1 + 10000) %>%
+  dplyr::select(chr1, start1, end1, id1)
+
+hicTRsigB <- hicTRsigB %>%
+  dplyr::mutate(start2 = fragmentMid2 - 10000) %>%
+  dplyr::mutate(end2 = fragmentMid2 + 10000) %>%
+  dplyr::select(chr2, start2, end2, id2)
+
+# creating BED R data objects and saving them
+
+hicTRA_bed_data <- data.frame(chromosome = hicTRsigA$chr1, start = hicTRsigA$start1 - 1, end = hicTRsigA$end1, name = hicTRsigA$id1, score = 0, strand = '.')
+
+write.table(hicTRA_bed_data, "/rds/general/user/kmt23/ephemeral/data/concat/20khicfitTRsigA.bed", quote = FALSE, sep = "\t", row.names = FALSE, col.names = FALSE)
+
+hicTRB_bed_data <- data.frame(chromosome = hicTRsigB$chr2, start = hicTRsigB$start2 - 1, end = hicTRsigB$end2, name = hicTRsigB$id2, score = 0, strand = '.')
+
+write.table(hicTRB_bed_data, "/rds/general/user/kmt23/ephemeral/data/concat/20khicfitTRsigB.bed", quote = FALSE, sep = "\t", row.names = FALSE, col.names = FALSE)
+
+
+###### BIOMART ###########
+
+
+ensembl <- useEnsembl(biomart = "genes", dataset = "hsapiens_gene_ensembl")
+
+mcf7_de_genes <- read_csv("/rds/general/user/kmt23/ephemeral/data/concat/mcf7_RNA_results_all_hgnc.csv")
+
+
+mcf7_de_genes <- mcf7_de_genes %>%
+  dplyr::filter(padj <= 0.05) %>%
+  dplyr::select(ensembl_gene_id)
+
+
+ensembl_ids <- mcf7_de_genes$ensembl_gene_id
+
+genes <- getBM(
+  attributes = c('ensembl_gene_id', 'chromosome_name', 'transcription_start_site', 'strand'),
+  filters = 'ensembl_gene_id',
+  values = ensembl_ids,
+  mart = ensembl
+)
+
+genes <- genes %>%
+  distinct(ensembl_gene_id, .keep_all = TRUE) %>%
+  dplyr::mutate(start = transcription_start_site - 2500) %>%
+  dplyr::mutate(end = transcription_start_site + 2500)
+
+bed_data <- data.frame(chromosome = genes$chromosome_name, start = genes$start, end = genes$end, name = genes$ensembl_gene_id, score = 0, strand = ifelse(genes$strand == 1, "+", "-"))
+
+write.table(bed_data, "/rds/general/user/kmt23/ephemeral/data/concat/de_genes.bed", quote = FALSE, sep = "\t", row.names = FALSE, col.names = FALSE)
+
+###### ChIPpeakAnno ###########
+
+### DE Genes ###
+
+hicTRA <- toGRanges(hicTRA_bed_data, format = 'BED')
+hicTRB <- toGRanges(hicTRB_bed_data, format = 'BED')
+
+
+mcf7_de_gr <- toGRanges(bed_data, format = 'BED')
+
+
+hicTRA_anno <- annotatePeakInBatch(myPeakList = hicTRA, AnnotationData = mcf7_de_gr, output = 'overlapping', multiple = TRUE)
+hicTRB_anno <- annotatePeakInBatch(myPeakList = hicTRB, AnnotationData = mcf7_de_gr, output = 'overlapping', multiple = TRUE)
+
+
+hicTRA_ann <- as.data.frame(hicTRA_anno)
+hicTRB_ann <- as.data.frame(hicTRB_anno)
+
+View(hicTRA_ann)
+
+hicTRA_ann <- hicTRA_ann %>%
+  mutate(name = paste0(peak, "|", feature)) %>%
+  dplyr::select(seqnames, start, end, width, strand, score, name)
+hicTRB_ann <- hicTRB_ann %>%
+  mutate(name = paste0(peak, "|", feature)) %>%
+  dplyr::select(seqnames, start, end, width, strand, score, name)
+
+
+hicTRA_bed_data <- data.frame(chromosome = hicTRA_ann$seqnames, start = hicTRA_ann$start, end = hicTRA_ann$end, name = hicTRA_ann$name, score = 0, strand = '.')
+hicTRB_bed_data <- data.frame(chromosome = hicTRB_ann$seqnames, start = hicTRB_ann$start, end = hicTRB_ann$end, name = hicTRB_ann$name, score = 0, strand = '.')
+
+### DM H3K27Ac ###
+
+H3K27Ac_DM <- read.table("/rds/general/user/kmt23/ephemeral/data/concat/H3K27Acdif.bed")
+
+H3K27Ac_DM <- H3K27Ac_DM %>%
+  dplyr::rename(chromosome = V1, start = V2, end = V3, score = V5, strand = V6) %>%
+  mutate(name = paste0("KTdmAc", 1:nrow(H3K27Ac_DM))) %>%
+  dplyr::select(chromosome, start, end, name, score, strand)
+
+H3K27Ac_DM_gr <- toGRanges(H3K27Ac_DM, format = 'BED')
+
+hicTRA <- toGRanges(hicTRA_bed_data, format = 'BED')
+hicTRB <- toGRanges(hicTRB_bed_data, format = 'BED')
+
+
+hicTRA_anno <- annotatePeakInBatch(myPeakList = hicTRA, AnnotationData = H3K27Ac_DM_gr, output = 'overlapping', multiple = TRUE)
+hicTRB_anno <- annotatePeakInBatch(myPeakList = hicTRB, AnnotationData = H3K27Ac_DM_gr, output = 'overlapping', multiple = TRUE)
+
+
+hicTRA_ann <- as.data.frame(hicTRA_anno)
+hicTRB_ann <- as.data.frame(hicTRB_anno)
+
+
+hicTRA_ann <- hicTRA_ann %>%
+  mutate(name = paste0(peak, "|", feature)) %>%
+  dplyr::select(seqnames, start, end, width, strand, score, name)
+hicTRB_ann <- hicTRB_ann %>%
+  mutate(name = paste0(peak, "|", feature)) %>%
+  dplyr::select(seqnames, start, end, width, strand, score, name)
+
+
+hicTRA_bed_data <- data.frame(chromosome = hicTRA_ann$seqnames, start = hicTRA_ann$start, end = hicTRA_ann$end, name = hicTRA_ann$name, score = 0, strand = '.')
+hicTRB_bed_data <- data.frame(chromosome = hicTRB_ann$seqnames, start = hicTRB_ann$start, end = hicTRB_ann$end, name = hicTRB_ann$name, score = 0, strand = '.')
+
+
+### DM H3K4Me3 ###
+
+H3K4Me3_DM <- read.table("/rds/general/user/kmt23/ephemeral/data/concat/H3K4Me3dif.bed")
+
+H3K4Me3_DM <- H3K4Me3_DM %>%
+  dplyr::rename(chromosome = V1, start = V2, end = V3, score = V5, strand = V6) %>%
+  mutate(name = paste0("KTdmMe3", 1:nrow(H3K4Me3_DM))) %>%
+  dplyr::select(chromosome, start, end, name, score, strand)
+
+H3K4Me3_DM_gr <- toGRanges(H3K4Me3_DM, format = 'BED')
+
+
+hicTRA <- toGRanges(hicTRA_bed_data, format = 'BED')
+hicTRB <- toGRanges(hicTRB_bed_data, format = 'BED')
+
+hicTRA_anno <- annotatePeakInBatch(myPeakList = hicTRA, AnnotationData = H3K4Me3_DM_gr, output = 'overlapping', multiple = TRUE)
+hicTRB_anno <- annotatePeakInBatch(myPeakList = hicTRB, AnnotationData = H3K4Me3_DM_gr, output = 'overlapping', multiple = TRUE)
+
+hicTRA_ann <- as.data.frame(hicTRA_anno)
+hicTRB_ann <- as.data.frame(hicTRB_anno)
+
+hicTRA_ann <- hicTRA_ann %>%
+  mutate(name = paste0(peak, "|", feature)) %>%
+  dplyr::select(seqnames, start, end, width, strand, score, name)
+hicTRB_ann <- hicTRB_ann %>%
+  mutate(name = paste0(peak, "|", feature)) %>%
+  dplyr::select(seqnames, start, end, width, strand, score, name)
+
+hicTRA_bed_data <- data.frame(chromosome = hicTRA_ann$seqnames, start = hicTRA_ann$start, end = hicTRA_ann$end, name = hicTRA_ann$name, score = 0, strand = '.')
+hicTRB_bed_data <- data.frame(chromosome = hicTRB_ann$seqnames, start = hicTRB_ann$start, end = hicTRB_ann$end, name = hicTRB_ann$name, score = 0, strand = '.')
+
+
+
+### DM H3K4Me1 ###
+H3K4Me1_DM <- read.table("/rds/general/user/kmt23/ephemeral/data/concat/H3K4Me1dif.bed")
+
+H3K4Me1_DM <- H3K4Me1_DM %>%
+  dplyr::rename(chromosome = V1, start = V2, end = V3, score = V5, strand = V6) %>%
+  mutate(name = paste0("KTdmMe1", 1:nrow(H3K4Me1_DM))) %>%
+  dplyr::select(chromosome, start, end, name, score, strand)
+
+H3K4Me1_DM_gr <- toGRanges(H3K4Me1_DM, format = 'BED')
+
+
+hicTRA <- toGRanges(hicTRA_bed_data, format = 'BED')
+hicTRB <- toGRanges(hicTRB_bed_data, format = 'BED')
+
+hicTRA_anno <- annotatePeakInBatch(myPeakList = hicTRA, AnnotationData = H3K4Me1_DM_gr, output = 'overlapping', multiple = TRUE)
+hicTRB_anno <- annotatePeakInBatch(myPeakList = hicTRB, AnnotationData = H3K4Me1_DM_gr, output = 'overlapping', multiple = TRUE)
+
+hicTRA_ann <- as.data.frame(hicTRA_anno)
+hicTRB_ann <- as.data.frame(hicTRB_anno)
+
+hicTRA_ann <- hicTRA_ann %>%
+  mutate(name = paste0(peak, "|", feature)) %>%
+  dplyr::select(seqnames, start, end, width, strand, score, name)
+hicTRB_ann <- hicTRB_ann %>%
+  mutate(name = paste0(peak, "|", feature)) %>%
+  dplyr::select(seqnames, start, end, width, strand, score, name)
+
+hicTRA_bed_data <- data.frame(chromosome = hicTRA_ann$seqnames, start = hicTRA_ann$start, end = hicTRA_ann$end, name = hicTRA_ann$name, score = 0, strand = '.')
+hicTRB_bed_data <- data.frame(chromosome = hicTRB_ann$seqnames, start = hicTRB_ann$start, end = hicTRB_ann$end, name = hicTRB_ann$name, score = 0, strand = '.')
+
+
+### DO ATAC ###
+
+ATAC_DO <- read.table("/rds/general/user/kmt23/ephemeral/data/concat/mcf7_atac_nfr.bed")
+
+ATAC_DO <- ATAC_DO %>%
+  dplyr::rename(chromosome = V1, start = V2, end = V3, score = V5, strand = V6) %>%
+  mutate(name = paste0("KTdO", 1:nrow(ATAC_DO))) %>%
+  dplyr::select(chromosome, start, end, name, score, strand)
+
+ATAC_DO_gr <- toGRanges(ATAC_DO, format = 'BED')
+
+
+
+hicTRA <- toGRanges(hicTRA_bed_data, format = 'BED')
+hicTRB <- toGRanges(hicTRB_bed_data, format = 'BED')
+
+hicTRA_anno <- annotatePeakInBatch(myPeakList = hicTRA, AnnotationData = ATAC_DO_gr, output = 'overlapping', multiple = TRUE)
+hicTRB_anno <- annotatePeakInBatch(myPeakList = hicTRB, AnnotationData = ATAC_DO_gr, output = 'overlapping', multiple = TRUE)
+
+hicTRA_ann <- as.data.frame(hicTRA_anno)
+hicTRB_ann <- as.data.frame(hicTRB_anno)
+
+hicTRA_ann <- hicTRA_ann %>%
+  mutate(name = paste0(peak, "|", feature)) %>%
+  dplyr::select(seqnames, start, end, width, strand, score, name)
+hicTRB_ann <- hicTRB_ann %>%
+  mutate(name = paste0(peak, "|", feature)) %>%
+  dplyr::select(seqnames, start, end, width, strand, score, name)
+
+hicTRA_bed_data <- data.frame(chromosome = hicTRA_ann$seqnames, start = hicTRA_ann$start, end = hicTRA_ann$end, name = hicTRA_ann$name, score = 0, strand = '.')
+hicTRB_bed_data <- data.frame(chromosome = hicTRB_ann$seqnames, start = hicTRB_ann$start, end = hicTRB_ann$end, name = hicTRB_ann$name, score = 0, strand = '.')
+
+
+### All H3K27Ac ### 
+
+H3K27Ac <- read.table("/rds/general/user/kmt23/ephemeral/data/concat/09_Control5_H3K27Ac_peaks.bed_fin.bed")
+
+H3K27Ac <- H3K27Ac %>%
+  dplyr::rename(chromosome = V1, start = V2, end = V3) %>%
+  mutate(name = paste0("KTAc", 1:nrow(H3K27Ac))) %>%
+  dplyr::select(chromosome, start, end, name)
+
+H3K27Ac_gr <- toGRanges(H3K27Ac, format = 'BED')
+
+
+
+hicTRA <- toGRanges(hicTRA_bed_data, format = 'BED')
+hicTRB <- toGRanges(hicTRB_bed_data, format = 'BED')
+
+hicTRA_anno <- annotatePeakInBatch(myPeakList = hicTRA, AnnotationData = H3K27Ac_gr, output = 'overlapping', multiple = TRUE)
+hicTRB_anno <- annotatePeakInBatch(myPeakList = hicTRB, AnnotationData = H3K27Ac_gr, output = 'overlapping', multiple = TRUE)
+
+hicTRA_ann <- as.data.frame(hicTRA_anno)
+hicTRB_ann <- as.data.frame(hicTRB_anno)
+
+hicTRA_ann <- hicTRA_ann %>%
+  mutate(name = paste0(peak, "|", feature)) %>%
+  dplyr::select(seqnames, start, end, width, strand, score, name)
+hicTRB_ann <- hicTRB_ann %>%
+  mutate(name = paste0(peak, "|", feature)) %>%
+  dplyr::select(seqnames, start, end, width, strand, score, name)
+
+hicTRA_bed_data <- data.frame(chromosome = hicTRA_ann$seqnames, start = hicTRA_ann$start, end = hicTRA_ann$end, name = hicTRA_ann$name, score = 0, strand = '.')
+hicTRB_bed_data <- data.frame(chromosome = hicTRB_ann$seqnames, start = hicTRB_ann$start, end = hicTRB_ann$end, name = hicTRB_ann$name, score = 0, strand = '.')
+
+
+
+### All H3K4Me1 ###
+
+H3K4Me3 <- read.table("/rds/general/user/kmt23/ephemeral/data/concat/01_Control1_H3K4Me3_peaks.bed_fin.bed")
+
+H3K4Me3 <- H3K4Me3 %>%
+  dplyr::rename(chromosome = V1, start = V2, end = V3) %>%
+  mutate(name = paste0("KTMe3", 1:nrow(H3K4Me3))) %>%
+  dplyr::select(chromosome, start, end, name)
+
+H3K4Me3_gr <- toGRanges(H3K4Me3, format = 'BED')
+
+
+
+hicTRA <- toGRanges(hicTRA_bed_data, format = 'BED')
+hicTRB <- toGRanges(hicTRB_bed_data, format = 'BED')
+
+hicTRA_anno <- annotatePeakInBatch(myPeakList = hicTRA, AnnotationData = H3K4Me3_gr, output = 'overlapping', multiple = TRUE)
+hicTRB_anno <- annotatePeakInBatch(myPeakList = hicTRB, AnnotationData = H3K4Me3_gr, output = 'overlapping', multiple = TRUE)
+
+hicTRA_ann <- as.data.frame(hicTRA_anno)
+hicTRB_ann <- as.data.frame(hicTRB_anno)
+
+hicTRA_ann <- hicTRA_ann %>%
+  mutate(name = paste0(peak, "|", feature)) %>%
+  dplyr::select(seqnames, start, end, width, strand, score, name)
+hicTRB_ann <- hicTRB_ann %>%
+  mutate(name = paste0(peak, "|", feature)) %>%
+  dplyr::select(seqnames, start, end, width, strand, score, name)
+
+hicTRA_bed_data <- data.frame(chromosome = hicTRA_ann$seqnames, start = hicTRA_ann$start, end = hicTRA_ann$end, name = hicTRA_ann$name, score = 0, strand = '.')
+hicTRB_bed_data <- data.frame(chromosome = hicTRB_ann$seqnames, start = hicTRB_ann$start, end = hicTRB_ann$end, name = hicTRB_ann$name, score = 0, strand = '.')
+
+
+### All ATAC ###
+
+ATAC <- read.table("/rds/general/user/kmt23/ephemeral/data/concat/sorted_1_0A5L_01JKMRC_BrCa-TREATED-1_ATAC_hs_i201_r1.fastq.sam_noM.bam_ASF.bam_MACS_ATACSeq_NFR_Peaks_peaks.bed_j.bed")
+
+ATAC <- ATAC %>%
+  dplyr::rename(chromosome = V1, start = V2, end = V3) %>%
+  mutate(name = paste0("KTATAC", 1:nrow(ATAC))) %>%
+  dplyr::select(chromosome, start, end, name)
+
+ATAC_gr <- toGRanges(ATAC, format = 'BED')
+
+
+hicTRA <- toGRanges(hicTRA_bed_data, format = 'BED')
+hicTRB <- toGRanges(hicTRB_bed_data, format = 'BED')
+
+hicTRA_anno <- annotatePeakInBatch(myPeakList = hicTRA, AnnotationData = ATAC_gr, output = 'overlapping', multiple = TRUE)
+hicTRB_anno <- annotatePeakInBatch(myPeakList = hicTRB, AnnotationData = ATAC_gr, output = 'overlapping', multiple = TRUE)
+
+hicTRA_ann <- as.data.frame(hicTRA_anno)
+hicTRB_ann <- as.data.frame(hicTRB_anno)
+
+hicTRA_ann <- hicTRA_ann %>%
+  mutate(name = paste0(peak, "|", feature)) %>%
+  dplyr::select(seqnames, start, end, width, strand, score, name)
+hicTRB_ann <- hicTRB_ann %>%
+  mutate(name = paste0(peak, "|", feature)) %>%
+  dplyr::select(seqnames, start, end, width, strand, score, name)
+
+hicTRA_bed_data <- data.frame(chromosome = hicTRA_ann$seqnames, start = hicTRA_ann$start, end = hicTRA_ann$end, name = hicTRA_ann$name, score = 0, strand = '.')
+hicTRB_bed_data <- data.frame(chromosome = hicTRB_ann$seqnames, start = hicTRB_ann$start, end = hicTRB_ann$end, name = hicTRB_ann$name, score = 0, strand = '.')
+
+
+
+### All H3K4Me1
+
+H3K4Me1 <- read.table("/rds/general/user/kmt23/ephemeral/data/concat/05_Control3_H3K4Me1_peaks.bed_fin.bed")
+H3K4Me1 <- H3K4Me1 %>% dplyr::rename(chromosome = V1, start = V2, end = V3) %>% mutate(name = paste0("KTMe1", 1:nrow(H3K4Me1))) %>% dplyr::select(chromosome, start, end, name)
+
+H3K4Me1_gr <- toGRanges(H3K4Me1, format = 'BED')
+
+
+
+
+hicTRA <- toGRanges(hicTRA_bed_data, format = 'BED')
+hicTRB <- toGRanges(hicTRB_bed_data, format = 'BED')
+
+hicTRA_anno <- annotatePeakInBatch(myPeakList = hicTRA, AnnotationData = H3K4Me1_gr, output = 'overlapping', multiple = TRUE)
+hicTRB_anno <- annotatePeakInBatch(myPeakList = hicTRB, AnnotationData = H3K4Me1_gr, output = 'overlapping', multiple = TRUE)
+
+hicTRA_ann <- as.data.frame(hicTRA_anno)
+hicTRB_ann <- as.data.frame(hicTRB_anno)
+
+hicTRA_ann <- hicTRA_ann %>%
+  mutate(name = paste0(peak, "|", feature)) %>%
+  dplyr::select(seqnames, start, end, width, strand, score, name)
+hicTRB_ann <- hicTRB_ann %>%
+  mutate(name = paste0(peak, "|", feature)) %>%
+  dplyr::select(seqnames, start, end, width, strand, score, name)
+
+hicTRA_bed_data <- data.frame(chromosome = hicTRA_ann$seqnames, start = hicTRA_ann$start, end = hicTRA_ann$end, name = hicTRA_ann$name, score = 0, strand = '.')
+hicTRB_bed_data <- data.frame(chromosome = hicTRB_ann$seqnames, start = hicTRB_ann$start, end = hicTRB_ann$end, name = hicTRB_ann$name, score = 0, strand = '.')
+
+
+
+hicTRA_separated <- hicTRA_bed_data %>%
+  separate(name, into = c("Int_ID", "DE_genes", "Dif_H3K27Ac", "Dif_H3K4Me3", "Dif_H3K4Me1", "Dif_ATAC", "H3K27Ac", "H3K4Me3", "ATAC", "H3K4Me1"), sep = "[.|]")
+hicTRB_separated <- hicTRB_bed_data %>%
+  separate(name, into = c("Int_ID", "DE_genes", "Dif_H3K27Ac", "Dif_H3K4Me3", "Dif_H3K4Me1", "Dif_ATAC", "H3K27Ac", "H3K4Me3", "ATAC", "H3K4Me1"), sep = "[.|]")
+
+write_csv(hicTRA_separated, "/rds/general/user/kmt23/ephemeral/data/concat/fithic_tr20_A_all.csv")
+
+write_csv(hicTRB_separated, "/rds/general/user/kmt23/ephemeral/data/concat/fithic_tr20_B_all.csv")
+```
+
+#### 40 kb
+
+```{r}
+###### FITHIC ###########
+
+# read in significant TREATED interactions
+
+hicTR <- read_delim("/rds/general/ephemeral/user/kmt23/ephemeral/data/concat/FitHiC.spline_pass2.res40000.significances.txt")
+
+# renaming is necessary for filtering
+hicTRsig <- hicTR %>%
+  dplyr::rename(pvalue = 'p-value') %>%
+  dplyr::rename(qvalue = 'q-value') %>%
+  dplyr::filter(qvalue <= 0.05)
+
+# setting up ids, so that I can split the two parts of interaction apart and annotate them
+hicTRsig$id1 <- paste0("KTsInt", 1:nrow(hicTRsig))
+hicTRsig$id2 <- paste0("KTsInt", 1:nrow(hicTRsig))
+
+# splitting the two parts of the interaction apart
+hicTRsigA <- hicTRsig %>%
+  dplyr::select(chr1, fragmentMid1, id1)
+hicTRsigB <- hicTRsig %>%
+  dplyr::select(chr2, fragmentMid2, id2)
+
+# expanding the midpoint of the fragment to achieve the 20kb resolution
+hicTRsigA <- hicTRsigA %>%
+  dplyr::mutate(start1 = fragmentMid1 - 20000) %>%
+  dplyr::mutate(end1 = fragmentMid1 + 20000) %>%
+  dplyr::select(chr1, start1, end1, id1)
+
+hicTRsigB <- hicTRsigB %>%
+  dplyr::mutate(start2 = fragmentMid2 - 20000) %>%
+  dplyr::mutate(end2 = fragmentMid2 + 20000) %>%
+  dplyr::select(chr2, start2, end2, id2)
+
+# creating BED R data objects and saving them
+
+hicTRA_bed_data <- data.frame(chromosome = hicTRsigA$chr1, start = hicTRsigA$start1 - 1, end = hicTRsigA$end1, name = hicTRsigA$id1, score = 0, strand = '.')
+
+write.table(hicTRA_bed_data, "/rds/general/user/kmt23/ephemeral/data/concat/20khicfitTRsigA.bed", quote = FALSE, sep = "\t", row.names = FALSE, col.names = FALSE)
+
+hicTRB_bed_data <- data.frame(chromosome = hicTRsigB$chr2, start = hicTRsigB$start2 - 1, end = hicTRsigB$end2, name = hicTRsigB$id2, score = 0, strand = '.')
+
+write.table(hicTRB_bed_data, "/rds/general/user/kmt23/ephemeral/data/concat/20khicfitTRsigB.bed", quote = FALSE, sep = "\t", row.names = FALSE, col.names = FALSE)
+
+
+###### BIOMART ###########
+
+
+ensembl <- useEnsembl(biomart = "genes", dataset = "hsapiens_gene_ensembl")
+
+mcf7_de_genes <- read_csv("/rds/general/user/kmt23/ephemeral/data/concat/mcf7_RNA_results_all_hgnc.csv")
+
+
+mcf7_de_genes <- mcf7_de_genes %>%
+  dplyr::filter(padj <= 0.05) %>%
+  dplyr::select(ensembl_gene_id)
+
+
+ensembl_ids <- mcf7_de_genes$ensembl_gene_id
+
+genes <- getBM(
+  attributes = c('ensembl_gene_id', 'chromosome_name', 'transcription_start_site', 'strand'),
+  filters = 'ensembl_gene_id',
+  values = ensembl_ids,
+  mart = ensembl
+)
+
+genes <- genes %>%
+  distinct(ensembl_gene_id, .keep_all = TRUE) %>%
+  dplyr::mutate(start = transcription_start_site - 2500) %>%
+  dplyr::mutate(end = transcription_start_site + 2500)
+
+bed_data <- data.frame(chromosome = genes$chromosome_name, start = genes$start, end = genes$end, name = genes$ensembl_gene_id, score = 0, strand = ifelse(genes$strand == 1, "+", "-"))
+
+write.table(bed_data, "/rds/general/user/kmt23/ephemeral/data/concat/de_genes.bed", quote = FALSE, sep = "\t", row.names = FALSE, col.names = FALSE)
+
+###### ChIPpeakAnno ###########
+
+### DE Genes ###
+
+hicTRA <- toGRanges(hicTRA_bed_data, format = 'BED')
+hicTRB <- toGRanges(hicTRB_bed_data, format = 'BED')
+
+
+mcf7_de_gr <- toGRanges(bed_data, format = 'BED')
+
+
+hicTRA_anno <- annotatePeakInBatch(myPeakList = hicTRA, AnnotationData = mcf7_de_gr, output = 'overlapping', multiple = TRUE)
+hicTRB_anno <- annotatePeakInBatch(myPeakList = hicTRB, AnnotationData = mcf7_de_gr, output = 'overlapping', multiple = TRUE)
+
+
+hicTRA_ann <- as.data.frame(hicTRA_anno)
+hicTRB_ann <- as.data.frame(hicTRB_anno)
+
+View(hicTRA_ann)
+
+hicTRA_ann <- hicTRA_ann %>%
+  mutate(name = paste0(peak, "|", feature)) %>%
+  dplyr::select(seqnames, start, end, width, strand, score, name)
+hicTRB_ann <- hicTRB_ann %>%
+  mutate(name = paste0(peak, "|", feature)) %>%
+  dplyr::select(seqnames, start, end, width, strand, score, name)
+
+
+hicTRA_bed_data <- data.frame(chromosome = hicTRA_ann$seqnames, start = hicTRA_ann$start, end = hicTRA_ann$end, name = hicTRA_ann$name, score = 0, strand = '.')
+hicTRB_bed_data <- data.frame(chromosome = hicTRB_ann$seqnames, start = hicTRB_ann$start, end = hicTRB_ann$end, name = hicTRB_ann$name, score = 0, strand = '.')
+
+### DM H3K27Ac ###
+
+H3K27Ac_DM <- read.table("/rds/general/user/kmt23/ephemeral/data/concat/H3K27Acdif.bed")
+
+H3K27Ac_DM <- H3K27Ac_DM %>%
+  dplyr::rename(chromosome = V1, start = V2, end = V3, score = V5, strand = V6) %>%
+  mutate(name = paste0("KTdmAc", 1:nrow(H3K27Ac_DM))) %>%
+  dplyr::select(chromosome, start, end, name, score, strand)
+
+H3K27Ac_DM_gr <- toGRanges(H3K27Ac_DM, format = 'BED')
+
+hicTRA <- toGRanges(hicTRA_bed_data, format = 'BED')
+hicTRB <- toGRanges(hicTRB_bed_data, format = 'BED')
+
+
+hicTRA_anno <- annotatePeakInBatch(myPeakList = hicTRA, AnnotationData = H3K27Ac_DM_gr, output = 'overlapping', multiple = TRUE)
+hicTRB_anno <- annotatePeakInBatch(myPeakList = hicTRB, AnnotationData = H3K27Ac_DM_gr, output = 'overlapping', multiple = TRUE)
+
+
+hicTRA_ann <- as.data.frame(hicTRA_anno)
+hicTRB_ann <- as.data.frame(hicTRB_anno)
+
+
+hicTRA_ann <- hicTRA_ann %>%
+  mutate(name = paste0(peak, "|", feature)) %>%
+  dplyr::select(seqnames, start, end, width, strand, score, name)
+hicTRB_ann <- hicTRB_ann %>%
+  mutate(name = paste0(peak, "|", feature)) %>%
+  dplyr::select(seqnames, start, end, width, strand, score, name)
+
+
+hicTRA_bed_data <- data.frame(chromosome = hicTRA_ann$seqnames, start = hicTRA_ann$start, end = hicTRA_ann$end, name = hicTRA_ann$name, score = 0, strand = '.')
+hicTRB_bed_data <- data.frame(chromosome = hicTRB_ann$seqnames, start = hicTRB_ann$start, end = hicTRB_ann$end, name = hicTRB_ann$name, score = 0, strand = '.')
+
+
+### DM H3K4Me3 ###
+
+H3K4Me3_DM <- read.table("/rds/general/user/kmt23/ephemeral/data/concat/H3K4Me3dif.bed")
+
+H3K4Me3_DM <- H3K4Me3_DM %>%
+  dplyr::rename(chromosome = V1, start = V2, end = V3, score = V5, strand = V6) %>%
+  mutate(name = paste0("KTdmMe3", 1:nrow(H3K4Me3_DM))) %>%
+  dplyr::select(chromosome, start, end, name, score, strand)
+
+H3K4Me3_DM_gr <- toGRanges(H3K4Me3_DM, format = 'BED')
+
+
+hicTRA <- toGRanges(hicTRA_bed_data, format = 'BED')
+hicTRB <- toGRanges(hicTRB_bed_data, format = 'BED')
+
+hicTRA_anno <- annotatePeakInBatch(myPeakList = hicTRA, AnnotationData = H3K4Me3_DM_gr, output = 'overlapping', multiple = TRUE)
+hicTRB_anno <- annotatePeakInBatch(myPeakList = hicTRB, AnnotationData = H3K4Me3_DM_gr, output = 'overlapping', multiple = TRUE)
+
+hicTRA_ann <- as.data.frame(hicTRA_anno)
+hicTRB_ann <- as.data.frame(hicTRB_anno)
+
+hicTRA_ann <- hicTRA_ann %>%
+  mutate(name = paste0(peak, "|", feature)) %>%
+  dplyr::select(seqnames, start, end, width, strand, score, name)
+hicTRB_ann <- hicTRB_ann %>%
+  mutate(name = paste0(peak, "|", feature)) %>%
+  dplyr::select(seqnames, start, end, width, strand, score, name)
+
+hicTRA_bed_data <- data.frame(chromosome = hicTRA_ann$seqnames, start = hicTRA_ann$start, end = hicTRA_ann$end, name = hicTRA_ann$name, score = 0, strand = '.')
+hicTRB_bed_data <- data.frame(chromosome = hicTRB_ann$seqnames, start = hicTRB_ann$start, end = hicTRB_ann$end, name = hicTRB_ann$name, score = 0, strand = '.')
+
+
+
+### DM H3K4Me1 ###
+H3K4Me1_DM <- read.table("/rds/general/user/kmt23/ephemeral/data/concat/H3K4Me1dif.bed")
+
+H3K4Me1_DM <- H3K4Me1_DM %>%
+  dplyr::rename(chromosome = V1, start = V2, end = V3, score = V5, strand = V6) %>%
+  mutate(name = paste0("KTdmMe1", 1:nrow(H3K4Me1_DM))) %>%
+  dplyr::select(chromosome, start, end, name, score, strand)
+
+H3K4Me1_DM_gr <- toGRanges(H3K4Me1_DM, format = 'BED')
+
+
+hicTRA <- toGRanges(hicTRA_bed_data, format = 'BED')
+hicTRB <- toGRanges(hicTRB_bed_data, format = 'BED')
+
+hicTRA_anno <- annotatePeakInBatch(myPeakList = hicTRA, AnnotationData = H3K4Me1_DM_gr, output = 'overlapping', multiple = TRUE)
+hicTRB_anno <- annotatePeakInBatch(myPeakList = hicTRB, AnnotationData = H3K4Me1_DM_gr, output = 'overlapping', multiple = TRUE)
+
+hicTRA_ann <- as.data.frame(hicTRA_anno)
+hicTRB_ann <- as.data.frame(hicTRB_anno)
+
+hicTRA_ann <- hicTRA_ann %>%
+  mutate(name = paste0(peak, "|", feature)) %>%
+  dplyr::select(seqnames, start, end, width, strand, score, name)
+hicTRB_ann <- hicTRB_ann %>%
+  mutate(name = paste0(peak, "|", feature)) %>%
+  dplyr::select(seqnames, start, end, width, strand, score, name)
+
+hicTRA_bed_data <- data.frame(chromosome = hicTRA_ann$seqnames, start = hicTRA_ann$start, end = hicTRA_ann$end, name = hicTRA_ann$name, score = 0, strand = '.')
+hicTRB_bed_data <- data.frame(chromosome = hicTRB_ann$seqnames, start = hicTRB_ann$start, end = hicTRB_ann$end, name = hicTRB_ann$name, score = 0, strand = '.')
+
+
+### DO ATAC ###
+
+ATAC_DO <- read.table("/rds/general/user/kmt23/ephemeral/data/concat/mcf7_atac_nfr.bed")
+
+ATAC_DO <- ATAC_DO %>%
+  dplyr::rename(chromosome = V1, start = V2, end = V3, score = V5, strand = V6) %>%
+  mutate(name = paste0("KTdO", 1:nrow(ATAC_DO))) %>%
+  dplyr::select(chromosome, start, end, name, score, strand)
+
+ATAC_DO_gr <- toGRanges(ATAC_DO, format = 'BED')
+
+
+
+hicTRA <- toGRanges(hicTRA_bed_data, format = 'BED')
+hicTRB <- toGRanges(hicTRB_bed_data, format = 'BED')
+
+hicTRA_anno <- annotatePeakInBatch(myPeakList = hicTRA, AnnotationData = ATAC_DO_gr, output = 'overlapping', multiple = TRUE)
+hicTRB_anno <- annotatePeakInBatch(myPeakList = hicTRB, AnnotationData = ATAC_DO_gr, output = 'overlapping', multiple = TRUE)
+
+hicTRA_ann <- as.data.frame(hicTRA_anno)
+hicTRB_ann <- as.data.frame(hicTRB_anno)
+
+hicTRA_ann <- hicTRA_ann %>%
+  mutate(name = paste0(peak, "|", feature)) %>%
+  dplyr::select(seqnames, start, end, width, strand, score, name)
+hicTRB_ann <- hicTRB_ann %>%
+  mutate(name = paste0(peak, "|", feature)) %>%
+  dplyr::select(seqnames, start, end, width, strand, score, name)
+
+hicTRA_bed_data <- data.frame(chromosome = hicTRA_ann$seqnames, start = hicTRA_ann$start, end = hicTRA_ann$end, name = hicTRA_ann$name, score = 0, strand = '.')
+hicTRB_bed_data <- data.frame(chromosome = hicTRB_ann$seqnames, start = hicTRB_ann$start, end = hicTRB_ann$end, name = hicTRB_ann$name, score = 0, strand = '.')
+
+
+### All H3K27Ac ### 
+
+H3K27Ac <- read.table("/rds/general/user/kmt23/ephemeral/data/concat/09_Control5_H3K27Ac_peaks.bed_fin.bed")
+
+H3K27Ac <- H3K27Ac %>%
+  dplyr::rename(chromosome = V1, start = V2, end = V3) %>%
+  mutate(name = paste0("KTAc", 1:nrow(H3K27Ac))) %>%
+  dplyr::select(chromosome, start, end, name)
+
+H3K27Ac_gr <- toGRanges(H3K27Ac, format = 'BED')
+
+
+
+hicTRA <- toGRanges(hicTRA_bed_data, format = 'BED')
+hicTRB <- toGRanges(hicTRB_bed_data, format = 'BED')
+
+hicTRA_anno <- annotatePeakInBatch(myPeakList = hicTRA, AnnotationData = H3K27Ac_gr, output = 'overlapping', multiple = TRUE)
+hicTRB_anno <- annotatePeakInBatch(myPeakList = hicTRB, AnnotationData = H3K27Ac_gr, output = 'overlapping', multiple = TRUE)
+
+hicTRA_ann <- as.data.frame(hicTRA_anno)
+hicTRB_ann <- as.data.frame(hicTRB_anno)
+
+hicTRA_ann <- hicTRA_ann %>%
+  mutate(name = paste0(peak, "|", feature)) %>%
+  dplyr::select(seqnames, start, end, width, strand, score, name)
+hicTRB_ann <- hicTRB_ann %>%
+  mutate(name = paste0(peak, "|", feature)) %>%
+  dplyr::select(seqnames, start, end, width, strand, score, name)
+
+hicTRA_bed_data <- data.frame(chromosome = hicTRA_ann$seqnames, start = hicTRA_ann$start, end = hicTRA_ann$end, name = hicTRA_ann$name, score = 0, strand = '.')
+hicTRB_bed_data <- data.frame(chromosome = hicTRB_ann$seqnames, start = hicTRB_ann$start, end = hicTRB_ann$end, name = hicTRB_ann$name, score = 0, strand = '.')
+
+
+
+### All H3K4Me1 ###
+
+H3K4Me3 <- read.table("/rds/general/user/kmt23/ephemeral/data/concat/01_Control1_H3K4Me3_peaks.bed_fin.bed")
+
+H3K4Me3 <- H3K4Me3 %>%
+  dplyr::rename(chromosome = V1, start = V2, end = V3) %>%
+  mutate(name = paste0("KTMe3", 1:nrow(H3K4Me3))) %>%
+  dplyr::select(chromosome, start, end, name)
+
+H3K4Me3_gr <- toGRanges(H3K4Me3, format = 'BED')
+
+
+
+hicTRA <- toGRanges(hicTRA_bed_data, format = 'BED')
+hicTRB <- toGRanges(hicTRB_bed_data, format = 'BED')
+
+hicTRA_anno <- annotatePeakInBatch(myPeakList = hicTRA, AnnotationData = H3K4Me3_gr, output = 'overlapping', multiple = TRUE)
+hicTRB_anno <- annotatePeakInBatch(myPeakList = hicTRB, AnnotationData = H3K4Me3_gr, output = 'overlapping', multiple = TRUE)
+
+hicTRA_ann <- as.data.frame(hicTRA_anno)
+hicTRB_ann <- as.data.frame(hicTRB_anno)
+
+hicTRA_ann <- hicTRA_ann %>%
+  mutate(name = paste0(peak, "|", feature)) %>%
+  dplyr::select(seqnames, start, end, width, strand, score, name)
+hicTRB_ann <- hicTRB_ann %>%
+  mutate(name = paste0(peak, "|", feature)) %>%
+  dplyr::select(seqnames, start, end, width, strand, score, name)
+
+hicTRA_bed_data <- data.frame(chromosome = hicTRA_ann$seqnames, start = hicTRA_ann$start, end = hicTRA_ann$end, name = hicTRA_ann$name, score = 0, strand = '.')
+hicTRB_bed_data <- data.frame(chromosome = hicTRB_ann$seqnames, start = hicTRB_ann$start, end = hicTRB_ann$end, name = hicTRB_ann$name, score = 0, strand = '.')
+
+
+### All ATAC ###
+
+ATAC <- read.table("/rds/general/user/kmt23/ephemeral/data/concat/sorted_1_0A5L_01JKMRC_BrCa-TREATED-1_ATAC_hs_i201_r1.fastq.sam_noM.bam_ASF.bam_MACS_ATACSeq_NFR_Peaks_peaks.bed_j.bed")
+
+ATAC <- ATAC %>%
+  dplyr::rename(chromosome = V1, start = V2, end = V3) %>%
+  mutate(name = paste0("KTATAC", 1:nrow(ATAC))) %>%
+  dplyr::select(chromosome, start, end, name)
+
+ATAC_gr <- toGRanges(ATAC, format = 'BED')
+
+
+hicTRA <- toGRanges(hicTRA_bed_data, format = 'BED')
+hicTRB <- toGRanges(hicTRB_bed_data, format = 'BED')
+
+hicTRA_anno <- annotatePeakInBatch(myPeakList = hicTRA, AnnotationData = ATAC_gr, output = 'overlapping', multiple = TRUE)
+hicTRB_anno <- annotatePeakInBatch(myPeakList = hicTRB, AnnotationData = ATAC_gr, output = 'overlapping', multiple = TRUE)
+
+hicTRA_ann <- as.data.frame(hicTRA_anno)
+hicTRB_ann <- as.data.frame(hicTRB_anno)
+
+hicTRA_ann <- hicTRA_ann %>%
+  mutate(name = paste0(peak, "|", feature)) %>%
+  dplyr::select(seqnames, start, end, width, strand, score, name)
+hicTRB_ann <- hicTRB_ann %>%
+  mutate(name = paste0(peak, "|", feature)) %>%
+  dplyr::select(seqnames, start, end, width, strand, score, name)
+
+hicTRA_bed_data <- data.frame(chromosome = hicTRA_ann$seqnames, start = hicTRA_ann$start, end = hicTRA_ann$end, name = hicTRA_ann$name, score = 0, strand = '.')
+hicTRB_bed_data <- data.frame(chromosome = hicTRB_ann$seqnames, start = hicTRB_ann$start, end = hicTRB_ann$end, name = hicTRB_ann$name, score = 0, strand = '.')
+
+
+
+### All H3K4Me1
+
+H3K4Me1 <- read.table("/rds/general/user/kmt23/ephemeral/data/concat/05_Control3_H3K4Me1_peaks.bed_fin.bed")
+H3K4Me1 <- H3K4Me1 %>% dplyr::rename(chromosome = V1, start = V2, end = V3) %>% mutate(name = paste0("KTMe1", 1:nrow(H3K4Me1))) %>% dplyr::select(chromosome, start, end, name)
+
+H3K4Me1_gr <- toGRanges(H3K4Me1, format = 'BED')
+
+
+
+
+hicTRA <- toGRanges(hicTRA_bed_data, format = 'BED')
+hicTRB <- toGRanges(hicTRB_bed_data, format = 'BED')
+
+hicTRA_anno <- annotatePeakInBatch(myPeakList = hicTRA, AnnotationData = H3K4Me1_gr, output = 'overlapping', multiple = TRUE)
+hicTRB_anno <- annotatePeakInBatch(myPeakList = hicTRB, AnnotationData = H3K4Me1_gr, output = 'overlapping', multiple = TRUE)
+
+hicTRA_ann <- as.data.frame(hicTRA_anno)
+hicTRB_ann <- as.data.frame(hicTRB_anno)
+
+hicTRA_ann <- hicTRA_ann %>%
+  mutate(name = paste0(peak, "|", feature)) %>%
+  dplyr::select(seqnames, start, end, width, strand, score, name)
+hicTRB_ann <- hicTRB_ann %>%
+  mutate(name = paste0(peak, "|", feature)) %>%
+  dplyr::select(seqnames, start, end, width, strand, score, name)
+
+hicTRA_bed_data <- data.frame(chromosome = hicTRA_ann$seqnames, start = hicTRA_ann$start, end = hicTRA_ann$end, name = hicTRA_ann$name, score = 0, strand = '.')
+hicTRB_bed_data <- data.frame(chromosome = hicTRB_ann$seqnames, start = hicTRB_ann$start, end = hicTRB_ann$end, name = hicTRB_ann$name, score = 0, strand = '.')
+
+
+
+hicTRA_separated <- hicTRA_bed_data %>%
+  separate(name, into = c("Int_ID", "DE_genes", "Dif_H3K27Ac", "Dif_H3K4Me3", "Dif_H3K4Me1", "Dif_ATAC", "H3K27Ac", "H3K4Me3", "ATAC", "H3K4Me1"), sep = "[.|]")
+hicTRB_separated <- hicTRB_bed_data %>%
+  separate(name, into = c("Int_ID", "DE_genes", "Dif_H3K27Ac", "Dif_H3K4Me3", "Dif_H3K4Me1", "Dif_ATAC", "H3K27Ac", "H3K4Me3", "ATAC", "H3K4Me1"), sep = "[.|]")
+
+write_csv(hicTRA_separated, "/rds/general/user/kmt23/ephemeral/data/concat/fithic_tr40_A_all.csv")
+
+write_csv(hicTRB_separated, "/rds/general/user/kmt23/ephemeral/data/concat/fithic_tr40_B_all.csv")
+```
+
+### Peaks shared among treated samples
+
+#### 20 kb
+
+```{r}
+###### FITHIC ###########
+
+# read in significant TREATED interactions
+
+hicTR <- read_delim("/rds/general/ephemeral/user/kmt23/ephemeral/data/concat/FitHiC.spline_pass2.res20000.significances.txt")
+
+# renaming is necessary for filtering
+hicTRsig <- hicTR %>%
+  dplyr::rename(pvalue = 'p-value') %>%
+  dplyr::rename(qvalue = 'q-value') %>%
+  dplyr::filter(qvalue <= 0.05)
+
+# setting up ids, so that I can split the two parts of interaction apart and annotate them
+hicTRsig$id1 <- paste0("KTsInt", 1:nrow(hicTRsig))
+hicTRsig$id2 <- paste0("KTsInt", 1:nrow(hicTRsig))
+
+# splitting the two parts of the interaction apart
+hicTRsigA <- hicTRsig %>%
+  dplyr::select(chr1, fragmentMid1, id1)
+hicTRsigB <- hicTRsig %>%
+  dplyr::select(chr2, fragmentMid2, id2)
+
+# expanding the midpoint of the fragment to achieve the 40kb resolution
+hicTRsigA <- hicTRsigA %>%
+  dplyr::mutate(start1 = fragmentMid1 - 10000) %>%
+  dplyr::mutate(end1 = fragmentMid1 + 10000) %>%
+  dplyr::select(chr1, start1, end1, id1)
+
+hicTRsigB <- hicTRsigB %>%
+  dplyr::mutate(start2 = fragmentMid2 - 10000) %>%
+  dplyr::mutate(end2 = fragmentMid2 + 10000) %>%
+  dplyr::select(chr2, start2, end2, id2)
+
+hicTRA_bed_data <- data.frame(chromosome = hicTRsigA$chr1, start = hicTRsigA$start1 - 1, end = hicTRsigA$end1, name = hicTRsigA$id1, score = 0, strand = '.')
+
+write.table(hicTRA_bed_data, "/rds/general/user/kmt23/ephemeral/data/concat/40khicfitTRsigA.bed", quote = FALSE, sep = "\t", row.names = FALSE, col.names = FALSE)
+
+hicTRB_bed_data <- data.frame(chromosome = hicTRsigB$chr2, start = hicTRsigB$start2 - 1, end = hicTRsigB$end2, name = hicTRsigB$id2, score = 0, strand = '.')
+
+write.table(hicTRB_bed_data, "/rds/general/user/kmt23/ephemeral/data/concat/40khicfitTRsigB.bed", quote = FALSE, sep = "\t", row.names = FALSE, col.names = FALSE)
+
+
+###### BIOMART ###########
+
+
+ensembl <- useEnsembl(biomart = "genes", dataset = "hsapiens_gene_ensembl")
+
+mcf7_de_genes <- read_csv("/rds/general/user/kmt23/ephemeral/data/concat/mcf7_RNA_results_all_hgnc.csv")
+
+
+mcf7_de_genes <- mcf7_de_genes %>%
+  dplyr::filter(padj <= 0.05) %>%
+  dplyr::select(ensembl_gene_id)
+
+
+ensembl_ids <- mcf7_de_genes$ensembl_gene_id
+
+genes <- getBM(
+  attributes = c('ensembl_gene_id', 'chromosome_name', 'transcription_start_site', 'strand'),
+  filters = 'ensembl_gene_id',
+  values = ensembl_ids,
+  mart = ensembl
+)
+
+genes <- genes %>%
+  distinct(ensembl_gene_id, .keep_all = TRUE) %>%
+  dplyr::mutate(start = transcription_start_site - 2500) %>%
+  dplyr::mutate(end = transcription_start_site + 2500)
+
+bed_data <- data.frame(chromosome = genes$chromosome_name, start = genes$start, end = genes$end, name = genes$ensembl_gene_id, score = 0, strand = ifelse(genes$strand == 1, "+", "-"))
+
+write.table(bed_data, "/rds/general/user/kmt23/ephemeral/data/concat/de_genes.bed", quote = FALSE, sep = "\t", row.names = FALSE, col.names = FALSE)
+
+###### ChIPpeakAnno ###########
+
+### DE Genes ###
+
+hicTRA <- toGRanges(hicTRA_bed_data, format = 'BED')
+hicTRB <- toGRanges(hicTRB_bed_data, format = 'BED')
+
+
+mcf7_de_gr <- toGRanges(bed_data, format = 'BED')
+
+
+hicTRA_anno <- annotatePeakInBatch(myPeakList = hicTRA, AnnotationData = mcf7_de_gr, output = 'overlapping', multiple = TRUE)
+hicTRB_anno <- annotatePeakInBatch(myPeakList = hicTRB, AnnotationData = mcf7_de_gr, output = 'overlapping', multiple = TRUE)
+
+
+hicTRA_ann <- as.data.frame(hicTRA_anno)
+hicTRB_ann <- as.data.frame(hicTRB_anno)
+
+hicTRA_ann <- hicTRA_ann %>%
+  mutate(name = paste0(peak, "|", feature)) %>%
+  dplyr::select(seqnames, start, end, width, strand, score, name)
+hicTRB_ann <- hicTRB_ann %>%
+  mutate(name = paste0(peak, "|", feature)) %>%
+  dplyr::select(seqnames, start, end, width, strand, score, name)
+
+
+hicTRA_bed_data <- data.frame(chromosome = hicTRA_ann$seqnames, start = hicTRA_ann$start, end = hicTRA_ann$end, name = hicTRA_ann$name, score = 0, strand = '.')
+hicTRB_bed_data <- data.frame(chromosome = hicTRB_ann$seqnames, start = hicTRB_ann$start, end = hicTRB_ann$end, name = hicTRB_ann$name, score = 0, strand = '.')
+
+### DM H3K27Ac ###
+
+H3K27Ac_DM <- read.table("/rds/general/user/kmt23/ephemeral/data/concat/H3K27Acdif.bed")
+
+H3K27Ac_DM <- H3K27Ac_DM %>%
+  dplyr::rename(chromosome = V1, start = V2, end = V3, score = V5, strand = V6) %>%
+  mutate(name = paste0("KTdmAc", 1:nrow(H3K27Ac_DM))) %>%
+  dplyr::select(chromosome, start, end, name, score, strand)
+
+H3K27Ac_DM_gr <- toGRanges(H3K27Ac_DM, format = 'BED')
+
+hicTRA <- toGRanges(hicTRA_bed_data, format = 'BED')
+hicTRB <- toGRanges(hicTRB_bed_data, format = 'BED')
+
+
+hicTRA_anno <- annotatePeakInBatch(myPeakList = hicTRA, AnnotationData = H3K27Ac_DM_gr, output = 'overlapping', multiple = TRUE)
+hicTRB_anno <- annotatePeakInBatch(myPeakList = hicTRB, AnnotationData = H3K27Ac_DM_gr, output = 'overlapping', multiple = TRUE)
+
+
+hicTRA_ann <- as.data.frame(hicTRA_anno)
+hicTRB_ann <- as.data.frame(hicTRB_anno)
+
+
+hicTRA_ann <- hicTRA_ann %>%
+  mutate(name = paste0(peak, "|", feature)) %>%
+  dplyr::select(seqnames, start, end, width, strand, score, name)
+hicTRB_ann <- hicTRB_ann %>%
+  mutate(name = paste0(peak, "|", feature)) %>%
+  dplyr::select(seqnames, start, end, width, strand, score, name)
+
+
+hicTRA_bed_data <- data.frame(chromosome = hicTRA_ann$seqnames, start = hicTRA_ann$start, end = hicTRA_ann$end, name = hicTRA_ann$name, score = 0, strand = '.')
+hicTRB_bed_data <- data.frame(chromosome = hicTRB_ann$seqnames, start = hicTRB_ann$start, end = hicTRB_ann$end, name = hicTRB_ann$name, score = 0, strand = '.')
+
+
+### DM H3K4Me3 ###
+
+H3K4Me3_DM <- read.table("/rds/general/user/kmt23/ephemeral/data/concat/H3K4Me3dif.bed")
+
+H3K4Me3_DM <- H3K4Me3_DM %>%
+  dplyr::rename(chromosome = V1, start = V2, end = V3, score = V5, strand = V6) %>%
+  mutate(name = paste0("KTdmMe3", 1:nrow(H3K4Me3_DM))) %>%
+  dplyr::select(chromosome, start, end, name, score, strand)
+
+H3K4Me3_DM_gr <- toGRanges(H3K4Me3_DM, format = 'BED')
+
+
+hicTRA <- toGRanges(hicTRA_bed_data, format = 'BED')
+hicTRB <- toGRanges(hicTRB_bed_data, format = 'BED')
+
+hicTRA_anno <- annotatePeakInBatch(myPeakList = hicTRA, AnnotationData = H3K4Me3_DM_gr, output = 'overlapping', multiple = TRUE)
+hicTRB_anno <- annotatePeakInBatch(myPeakList = hicTRB, AnnotationData = H3K4Me3_DM_gr, output = 'overlapping', multiple = TRUE)
+
+hicTRA_ann <- as.data.frame(hicTRA_anno)
+hicTRB_ann <- as.data.frame(hicTRB_anno)
+
+hicTRA_ann <- hicTRA_ann %>%
+  mutate(name = paste0(peak, "|", feature)) %>%
+  dplyr::select(seqnames, start, end, width, strand, score, name)
+hicTRB_ann <- hicTRB_ann %>%
+  mutate(name = paste0(peak, "|", feature)) %>%
+  dplyr::select(seqnames, start, end, width, strand, score, name)
+
+hicTRA_bed_data <- data.frame(chromosome = hicTRA_ann$seqnames, start = hicTRA_ann$start, end = hicTRA_ann$end, name = hicTRA_ann$name, score = 0, strand = '.')
+hicTRB_bed_data <- data.frame(chromosome = hicTRB_ann$seqnames, start = hicTRB_ann$start, end = hicTRB_ann$end, name = hicTRB_ann$name, score = 0, strand = '.')
+
+
+
+### DM H3K4Me1 ###
+H3K4Me1_DM <- read.table("/rds/general/user/kmt23/ephemeral/data/concat/H3K4Me1dif.bed")
+
+H3K4Me1_DM <- H3K4Me1_DM %>%
+  dplyr::rename(chromosome = V1, start = V2, end = V3, score = V5, strand = V6) %>%
+  mutate(name = paste0("KTdmMe1", 1:nrow(H3K4Me1_DM))) %>%
+  dplyr::select(chromosome, start, end, name, score, strand)
+
+H3K4Me1_DM_gr <- toGRanges(H3K4Me1_DM, format = 'BED')
+
+
+hicTRA <- toGRanges(hicTRA_bed_data, format = 'BED')
+hicTRB <- toGRanges(hicTRB_bed_data, format = 'BED')
+
+hicTRA_anno <- annotatePeakInBatch(myPeakList = hicTRA, AnnotationData = H3K4Me1_DM_gr, output = 'overlapping', multiple = TRUE)
+hicTRB_anno <- annotatePeakInBatch(myPeakList = hicTRB, AnnotationData = H3K4Me1_DM_gr, output = 'overlapping', multiple = TRUE)
+
+hicTRA_ann <- as.data.frame(hicTRA_anno)
+hicTRB_ann <- as.data.frame(hicTRB_anno)
+
+hicTRA_ann <- hicTRA_ann %>%
+  mutate(name = paste0(peak, "|", feature)) %>%
+  dplyr::select(seqnames, start, end, width, strand, score, name)
+hicTRB_ann <- hicTRB_ann %>%
+  mutate(name = paste0(peak, "|", feature)) %>%
+  dplyr::select(seqnames, start, end, width, strand, score, name)
+
+hicTRA_bed_data <- data.frame(chromosome = hicTRA_ann$seqnames, start = hicTRA_ann$start, end = hicTRA_ann$end, name = hicTRA_ann$name, score = 0, strand = '.')
+hicTRB_bed_data <- data.frame(chromosome = hicTRB_ann$seqnames, start = hicTRB_ann$start, end = hicTRB_ann$end, name = hicTRB_ann$name, score = 0, strand = '.')
+
+
+### DO ATAC ###
+
+ATAC_DO <- read.table("/rds/general/user/kmt23/ephemeral/data/concat/mcf7_atac_nfr.bed")
+
+ATAC_DO <- ATAC_DO %>%
+  dplyr::rename(chromosome = V1, start = V2, end = V3, score = V5, strand = V6) %>%
+  mutate(name = paste0("KTdO", 1:nrow(ATAC_DO))) %>%
+  dplyr::select(chromosome, start, end, name, score, strand)
+
+ATAC_DO_gr <- toGRanges(ATAC_DO, format = 'BED')
+
+
+
+hicTRA <- toGRanges(hicTRA_bed_data, format = 'BED')
+hicTRB <- toGRanges(hicTRB_bed_data, format = 'BED')
+
+hicTRA_anno <- annotatePeakInBatch(myPeakList = hicTRA, AnnotationData = ATAC_DO_gr, output = 'overlapping', multiple = TRUE)
+hicTRB_anno <- annotatePeakInBatch(myPeakList = hicTRB, AnnotationData = ATAC_DO_gr, output = 'overlapping', multiple = TRUE)
+
+hicTRA_ann <- as.data.frame(hicTRA_anno)
+hicTRB_ann <- as.data.frame(hicTRB_anno)
+
+hicTRA_ann <- hicTRA_ann %>%
+  mutate(name = paste0(peak, "|", feature)) %>%
+  dplyr::select(seqnames, start, end, width, strand, score, name)
+hicTRB_ann <- hicTRB_ann %>%
+  mutate(name = paste0(peak, "|", feature)) %>%
+  dplyr::select(seqnames, start, end, width, strand, score, name)
+
+hicTRA_bed_data <- data.frame(chromosome = hicTRA_ann$seqnames, start = hicTRA_ann$start, end = hicTRA_ann$end, name = hicTRA_ann$name, score = 0, strand = '.')
+hicTRB_bed_data <- data.frame(chromosome = hicTRB_ann$seqnames, start = hicTRB_ann$start, end = hicTRB_ann$end, name = hicTRB_ann$name, score = 0, strand = '.')
+
+
+
+
+
+### Treated H3K27Ac ### 
+
+H3K27Ac_tr <- read.table("/rds/general/user/kmt23/ephemeral/data/concat/11_Treated5_H3K27Ac_peaks.bed_tr.bed")
+
+H3K27Ac_tr <- H3K27Ac_tr %>%
+  dplyr::rename(chromosome = V1, start = V2, end = V3) %>%
+  mutate(name = paste0("KTAcTR", 1:nrow(H3K27Ac_tr))) %>%
+  dplyr::select(chromosome, start, end, name)
+
+H3K27Ac_tr_gr <- toGRanges(H3K27Ac_tr, format = 'BED')
+
+
+hicTRA <- toGRanges(hicTRA_bed_data, format = 'BED')
+hicTRB <- toGRanges(hicTRB_bed_data, format = 'BED')
+
+hicTRA_anno <- annotatePeakInBatch(myPeakList = hicTRA, AnnotationData = H3K27Ac_tr_gr, output = 'overlapping', multiple = TRUE)
+hicTRB_anno <- annotatePeakInBatch(myPeakList = hicTRB, AnnotationData = H3K27Ac_tr_gr, output = 'overlapping', multiple = TRUE)
+
+hicTRA_ann <- as.data.frame(hicTRA_anno)
+hicTRB_ann <- as.data.frame(hicTRB_anno)
+
+hicTRA_ann <- hicTRA_ann %>%
+  mutate(name = paste0(peak, "|", feature)) %>%
+  dplyr::select(seqnames, start, end, width, strand, score, name)
+hicTRB_ann <- hicTRB_ann %>%
+  mutate(name = paste0(peak, "|", feature)) %>%
+  dplyr::select(seqnames, start, end, width, strand, score, name)
+
+hicTRA_bed_data <- data.frame(chromosome = hicTRA_ann$seqnames, start = hicTRA_ann$start, end = hicTRA_ann$end, name = hicTRA_ann$name, score = 0, strand = '.')
+hicTRB_bed_data <- data.frame(chromosome = hicTRB_ann$seqnames, start = hicTRB_ann$start, end = hicTRB_ann$end, name = hicTRB_ann$name, score = 0, strand = '.')
+
+
+
+### Treated H3K4Me3 ### 
+
+
+H3K4Me3_tr <- read.table("/rds/general/user/kmt23/ephemeral/data/concat/03_Treated1_H3K4Me3_peaks.bed_tr.bed")
+
+H3K4Me3_tr <- H3K4Me3_tr %>%
+  dplyr::rename(chromosome = V1, start = V2, end = V3) %>%
+  mutate(name = paste0("KTMe3TR", 1:nrow(H3K4Me3_tr))) %>%
+  dplyr::select(chromosome, start, end, name)
+
+H3K4Me3_tr_gr <- toGRanges(H3K4Me3_tr, format = 'BED')
+
+
+
+hicTRA <- toGRanges(hicTRA_bed_data, format = 'BED')
+hicTRB <- toGRanges(hicTRB_bed_data, format = 'BED')
+
+hicTRA_anno <- annotatePeakInBatch(myPeakList = hicTRA, AnnotationData = H3K4Me3_tr_gr, output = 'overlapping', multiple = TRUE)
+hicTRB_anno <- annotatePeakInBatch(myPeakList = hicTRB, AnnotationData = H3K4Me3_tr_gr, output = 'overlapping', multiple = TRUE)
+
+hicTRA_ann <- as.data.frame(hicTRA_anno)
+hicTRB_ann <- as.data.frame(hicTRB_anno)
+
+hicTRA_ann <- hicTRA_ann %>%
+  mutate(name = paste0(peak, "|", feature)) %>%
+  dplyr::select(seqnames, start, end, width, strand, score, name)
+hicTRB_ann <- hicTRB_ann %>%
+  mutate(name = paste0(peak, "|", feature)) %>%
+  dplyr::select(seqnames, start, end, width, strand, score, name)
+
+hicTRA_bed_data <- data.frame(chromosome = hicTRA_ann$seqnames, start = hicTRA_ann$start, end = hicTRA_ann$end, name = hicTRA_ann$name, score = 0, strand = '.')
+hicTRB_bed_data <- data.frame(chromosome = hicTRB_ann$seqnames, start = hicTRB_ann$start, end = hicTRB_ann$end, name = hicTRB_ann$name, score = 0, strand = '.')
+
+
+### Treated ATAC ###
+
+ATAC_tr <- read.table("/rds/general/user/kmt23/ephemeral/data/concat/sorted_1_0A5L_01JKMRC_BrCa-TREATED-1_ATAC_hs_i201_r1.fastq.sam_noM.bam_ASF.bam_MACS_ATACSeq_NFR_Peaks_peaks.bed_tr.bed")
+
+ATAC_tr <- ATAC_tr %>%
+  dplyr::rename(chromosome = V1, start = V2, end = V3) %>%
+  mutate(name = paste0("KTATACTR", 1:nrow(ATAC_tr))) %>%
+  dplyr::select(chromosome, start, end, name)
+
+ATAC_tr_gr <- toGRanges(ATAC_tr, format = 'BED')
+
+
+hicTRA <- toGRanges(hicTRA_bed_data, format = 'BED')
+hicTRB <- toGRanges(hicTRB_bed_data, format = 'BED')
+
+hicTRA_anno <- annotatePeakInBatch(myPeakList = hicTRA, AnnotationData = ATAC_tr_gr, output = 'overlapping', multiple = TRUE)
+hicTRB_anno <- annotatePeakInBatch(myPeakList = hicTRB, AnnotationData = ATAC_tr_gr, output = 'overlapping', multiple = TRUE)
+
+hicTRA_ann <- as.data.frame(hicTRA_anno)
+hicTRB_ann <- as.data.frame(hicTRB_anno)
+
+hicTRA_ann <- hicTRA_ann %>%
+  mutate(name = paste0(peak, "|", feature)) %>%
+  dplyr::select(seqnames, start, end, width, strand, score, name)
+hicTRB_ann <- hicTRB_ann %>%
+  mutate(name = paste0(peak, "|", feature)) %>%
+  dplyr::select(seqnames, start, end, width, strand, score, name)
+
+hicTRA_bed_data <- data.frame(chromosome = hicTRA_ann$seqnames, start = hicTRA_ann$start, end = hicTRA_ann$end, name = hicTRA_ann$name, score = 0, strand = '.')
+hicTRB_bed_data <- data.frame(chromosome = hicTRB_ann$seqnames, start = hicTRB_ann$start, end = hicTRB_ann$end, name = hicTRB_ann$name, score = 0, strand = '.')
+
+
+### Treated H3K4Me1
+
+H3K4Me1_tr <- read.table("/rds/general/user/kmt23/ephemeral/data/concat/07_Treated3_H3K4Me1_peaks.bed_tr.bed")
+H3K4Me1_tr <- H3K4Me1_tr %>% dplyr::rename(chromosome = V1, start = V2, end = V3) %>% mutate(name = paste0("KTMe1TR", 1:nrow(H3K4Me1_tr))) %>% dplyr::select(chromosome, start, end, name)
+
+H3K4Me1_tr_gr <- toGRanges(H3K4Me1_tr, format = 'BED')
+
+
+hicTRA <- toGRanges(hicTRA_bed_data, format = 'BED')
+hicTRB <- toGRanges(hicTRB_bed_data, format = 'BED')
+
+hicTRA_anno <- annotatePeakInBatch(myPeakList = hicTRA, AnnotationData = H3K4Me1_tr_gr, output = 'overlapping', multiple = TRUE)
+hicTRB_anno <- annotatePeakInBatch(myPeakList = hicTRB, AnnotationData = H3K4Me1_tr_gr, output = 'overlapping', multiple = TRUE)
+
+hicTRA_ann <- as.data.frame(hicTRA_anno)
+hicTRB_ann <- as.data.frame(hicTRB_anno)
+
+hicTRA_ann <- hicTRA_ann %>%
+  mutate(name = paste0(peak, "|", feature)) %>%
+  dplyr::select(seqnames, start, end, width, strand, score, name)
+hicTRB_ann <- hicTRB_ann %>%
+  mutate(name = paste0(peak, "|", feature)) %>%
+  dplyr::select(seqnames, start, end, width, strand, score, name)
+
+hicTRA_bed_data <- data.frame(chromosome = hicTRA_ann$seqnames, start = hicTRA_ann$start, end = hicTRA_ann$end, name = hicTRA_ann$name, score = 0, strand = '.')
+hicTRB_bed_data <- data.frame(chromosome = hicTRB_ann$seqnames, start = hicTRB_ann$start, end = hicTRB_ann$end, name = hicTRB_ann$name, score = 0, strand = '.')
+
+hicTRA_separated <- hicTRA_bed_data %>%
+  separate(name, into = c("Int_ID", "DE_genes", "Dif_H3K27Ac", "Dif_H3K4Me3", "Dif_H3K4Me1", "Dif_ATAC", "H3K27AcTR", "H3K4Me3TR", "ATACTR", "H3K4Me1TR"), sep = "[.|]")
+hicTRB_separated <- hicTRB_bed_data %>%
+  separate(name, into = c("Int_ID", "DE_genes", "Dif_H3K27Ac", "Dif_H3K4Me3", "Dif_H3K4Me1", "Dif_ATAC", "H3K27AcTR", "H3K4Me3TR", "ATACTR", "H3K4Me1TR"), sep = "[.|]")
+
+write_csv(hicTRA_separated, "/rds/general/user/kmt23/ephemeral/data/concat/fithic_tr20_A_treated.csv")
+
+write_csv(hicTRB_separated, "/rds/general/user/kmt23/ephemeral/data/concat/fithic_tr20_B_treated.csv")
+```
+
+#### 40 kb
+
+```{r}
+###### FITHIC ###########
+
+# read in significant TREATED interactions
+
+hicTR <- read_delim("/rds/general/ephemeral/user/kmt23/ephemeral/data/concat/FitHiC.spline_pass2.res40000.significances.txt")
+
+# renaming is necessary for filtering
+hicTRsig <- hicTR %>%
+  dplyr::rename(pvalue = 'p-value') %>%
+  dplyr::rename(qvalue = 'q-value') %>%
+  dplyr::filter(qvalue <= 0.05)
+
+# setting up ids, so that I can split the two parts of interaction apart and annotate them
+hicTRsig$id1 <- paste0("KTsInt", 1:nrow(hicTRsig))
+hicTRsig$id2 <- paste0("KTsInt", 1:nrow(hicTRsig))
+
+# splitting the two parts of the interaction apart
+hicTRsigA <- hicTRsig %>%
+  dplyr::select(chr1, fragmentMid1, id1)
+hicTRsigB <- hicTRsig %>%
+  dplyr::select(chr2, fragmentMid2, id2)
+
+# expanding the midpoint of the fragment to achieve the 40kb resolution
+hicTRsigA <- hicTRsigA %>%
+  dplyr::mutate(start1 = fragmentMid1 - 20000) %>%
+  dplyr::mutate(end1 = fragmentMid1 + 20000) %>%
+  dplyr::select(chr1, start1, end1, id1)
+
+hicTRsigB <- hicTRsigB %>%
+  dplyr::mutate(start2 = fragmentMid2 - 20000) %>%
+  dplyr::mutate(end2 = fragmentMid2 + 20000) %>%
+  dplyr::select(chr2, start2, end2, id2)
+
+hicTRA_bed_data <- data.frame(chromosome = hicTRsigA$chr1, start = hicTRsigA$start1 - 1, end = hicTRsigA$end1, name = hicTRsigA$id1, score = 0, strand = '.')
+
+write.table(hicTRA_bed_data, "/rds/general/user/kmt23/ephemeral/data/concat/40khicfitTRsigA.bed", quote = FALSE, sep = "\t", row.names = FALSE, col.names = FALSE)
+
+hicTRB_bed_data <- data.frame(chromosome = hicTRsigB$chr2, start = hicTRsigB$start2 - 1, end = hicTRsigB$end2, name = hicTRsigB$id2, score = 0, strand = '.')
+
+write.table(hicTRB_bed_data, "/rds/general/user/kmt23/ephemeral/data/concat/40khicfitTRsigB.bed", quote = FALSE, sep = "\t", row.names = FALSE, col.names = FALSE)
+
+
+###### BIOMART ###########
+
+
+ensembl <- useEnsembl(biomart = "genes", dataset = "hsapiens_gene_ensembl")
+
+mcf7_de_genes <- read_csv("/rds/general/user/kmt23/ephemeral/data/concat/mcf7_RNA_results_all_hgnc.csv")
+
+
+mcf7_de_genes <- mcf7_de_genes %>%
+  dplyr::filter(padj <= 0.05) %>%
+  dplyr::select(ensembl_gene_id)
+
+
+ensembl_ids <- mcf7_de_genes$ensembl_gene_id
+
+genes <- getBM(
+  attributes = c('ensembl_gene_id', 'chromosome_name', 'transcription_start_site', 'strand'),
+  filters = 'ensembl_gene_id',
+  values = ensembl_ids,
+  mart = ensembl
+)
+
+genes <- genes %>%
+  distinct(ensembl_gene_id, .keep_all = TRUE) %>%
+  dplyr::mutate(start = transcription_start_site - 2500) %>%
+  dplyr::mutate(end = transcription_start_site + 2500)
+
+bed_data <- data.frame(chromosome = genes$chromosome_name, start = genes$start, end = genes$end, name = genes$ensembl_gene_id, score = 0, strand = ifelse(genes$strand == 1, "+", "-"))
+
+write.table(bed_data, "/rds/general/user/kmt23/ephemeral/data/concat/de_genes.bed", quote = FALSE, sep = "\t", row.names = FALSE, col.names = FALSE)
+
+###### ChIPpeakAnno ###########
+
+### DE Genes ###
+
+hicTRA <- toGRanges(hicTRA_bed_data, format = 'BED')
+hicTRB <- toGRanges(hicTRB_bed_data, format = 'BED')
+
+
+mcf7_de_gr <- toGRanges(bed_data, format = 'BED')
+
+
+hicTRA_anno <- annotatePeakInBatch(myPeakList = hicTRA, AnnotationData = mcf7_de_gr, output = 'overlapping', multiple = TRUE)
+hicTRB_anno <- annotatePeakInBatch(myPeakList = hicTRB, AnnotationData = mcf7_de_gr, output = 'overlapping', multiple = TRUE)
+
+
+hicTRA_ann <- as.data.frame(hicTRA_anno)
+hicTRB_ann <- as.data.frame(hicTRB_anno)
+
+hicTRA_ann <- hicTRA_ann %>%
+  mutate(name = paste0(peak, "|", feature)) %>%
+  dplyr::select(seqnames, start, end, width, strand, score, name)
+hicTRB_ann <- hicTRB_ann %>%
+  mutate(name = paste0(peak, "|", feature)) %>%
+  dplyr::select(seqnames, start, end, width, strand, score, name)
+
+
+hicTRA_bed_data <- data.frame(chromosome = hicTRA_ann$seqnames, start = hicTRA_ann$start, end = hicTRA_ann$end, name = hicTRA_ann$name, score = 0, strand = '.')
+hicTRB_bed_data <- data.frame(chromosome = hicTRB_ann$seqnames, start = hicTRB_ann$start, end = hicTRB_ann$end, name = hicTRB_ann$name, score = 0, strand = '.')
+
+### DM H3K27Ac ###
+
+H3K27Ac_DM <- read.table("/rds/general/user/kmt23/ephemeral/data/concat/H3K27Acdif.bed")
+
+H3K27Ac_DM <- H3K27Ac_DM %>%
+  dplyr::rename(chromosome = V1, start = V2, end = V3, score = V5, strand = V6) %>%
+  mutate(name = paste0("KTdmAc", 1:nrow(H3K27Ac_DM))) %>%
+  dplyr::select(chromosome, start, end, name, score, strand)
+
+H3K27Ac_DM_gr <- toGRanges(H3K27Ac_DM, format = 'BED')
+
+hicTRA <- toGRanges(hicTRA_bed_data, format = 'BED')
+hicTRB <- toGRanges(hicTRB_bed_data, format = 'BED')
+
+
+hicTRA_anno <- annotatePeakInBatch(myPeakList = hicTRA, AnnotationData = H3K27Ac_DM_gr, output = 'overlapping', multiple = TRUE)
+hicTRB_anno <- annotatePeakInBatch(myPeakList = hicTRB, AnnotationData = H3K27Ac_DM_gr, output = 'overlapping', multiple = TRUE)
+
+
+hicTRA_ann <- as.data.frame(hicTRA_anno)
+hicTRB_ann <- as.data.frame(hicTRB_anno)
+
+
+hicTRA_ann <- hicTRA_ann %>%
+  mutate(name = paste0(peak, "|", feature)) %>%
+  dplyr::select(seqnames, start, end, width, strand, score, name)
+hicTRB_ann <- hicTRB_ann %>%
+  mutate(name = paste0(peak, "|", feature)) %>%
+  dplyr::select(seqnames, start, end, width, strand, score, name)
+
+
+hicTRA_bed_data <- data.frame(chromosome = hicTRA_ann$seqnames, start = hicTRA_ann$start, end = hicTRA_ann$end, name = hicTRA_ann$name, score = 0, strand = '.')
+hicTRB_bed_data <- data.frame(chromosome = hicTRB_ann$seqnames, start = hicTRB_ann$start, end = hicTRB_ann$end, name = hicTRB_ann$name, score = 0, strand = '.')
+
+
+### DM H3K4Me3 ###
+
+H3K4Me3_DM <- read.table("/rds/general/user/kmt23/ephemeral/data/concat/H3K4Me3dif.bed")
+
+H3K4Me3_DM <- H3K4Me3_DM %>%
+  dplyr::rename(chromosome = V1, start = V2, end = V3, score = V5, strand = V6) %>%
+  mutate(name = paste0("KTdmMe3", 1:nrow(H3K4Me3_DM))) %>%
+  dplyr::select(chromosome, start, end, name, score, strand)
+
+H3K4Me3_DM_gr <- toGRanges(H3K4Me3_DM, format = 'BED')
+
+
+hicTRA <- toGRanges(hicTRA_bed_data, format = 'BED')
+hicTRB <- toGRanges(hicTRB_bed_data, format = 'BED')
+
+hicTRA_anno <- annotatePeakInBatch(myPeakList = hicTRA, AnnotationData = H3K4Me3_DM_gr, output = 'overlapping', multiple = TRUE)
+hicTRB_anno <- annotatePeakInBatch(myPeakList = hicTRB, AnnotationData = H3K4Me3_DM_gr, output = 'overlapping', multiple = TRUE)
+
+hicTRA_ann <- as.data.frame(hicTRA_anno)
+hicTRB_ann <- as.data.frame(hicTRB_anno)
+
+hicTRA_ann <- hicTRA_ann %>%
+  mutate(name = paste0(peak, "|", feature)) %>%
+  dplyr::select(seqnames, start, end, width, strand, score, name)
+hicTRB_ann <- hicTRB_ann %>%
+  mutate(name = paste0(peak, "|", feature)) %>%
+  dplyr::select(seqnames, start, end, width, strand, score, name)
+
+hicTRA_bed_data <- data.frame(chromosome = hicTRA_ann$seqnames, start = hicTRA_ann$start, end = hicTRA_ann$end, name = hicTRA_ann$name, score = 0, strand = '.')
+hicTRB_bed_data <- data.frame(chromosome = hicTRB_ann$seqnames, start = hicTRB_ann$start, end = hicTRB_ann$end, name = hicTRB_ann$name, score = 0, strand = '.')
+
+
+
+### DM H3K4Me1 ###
+H3K4Me1_DM <- read.table("/rds/general/user/kmt23/ephemeral/data/concat/H3K4Me1dif.bed")
+
+H3K4Me1_DM <- H3K4Me1_DM %>%
+  dplyr::rename(chromosome = V1, start = V2, end = V3, score = V5, strand = V6) %>%
+  mutate(name = paste0("KTdmMe1", 1:nrow(H3K4Me1_DM))) %>%
+  dplyr::select(chromosome, start, end, name, score, strand)
+
+H3K4Me1_DM_gr <- toGRanges(H3K4Me1_DM, format = 'BED')
+
+
+hicTRA <- toGRanges(hicTRA_bed_data, format = 'BED')
+hicTRB <- toGRanges(hicTRB_bed_data, format = 'BED')
+
+hicTRA_anno <- annotatePeakInBatch(myPeakList = hicTRA, AnnotationData = H3K4Me1_DM_gr, output = 'overlapping', multiple = TRUE)
+hicTRB_anno <- annotatePeakInBatch(myPeakList = hicTRB, AnnotationData = H3K4Me1_DM_gr, output = 'overlapping', multiple = TRUE)
+
+hicTRA_ann <- as.data.frame(hicTRA_anno)
+hicTRB_ann <- as.data.frame(hicTRB_anno)
+
+hicTRA_ann <- hicTRA_ann %>%
+  mutate(name = paste0(peak, "|", feature)) %>%
+  dplyr::select(seqnames, start, end, width, strand, score, name)
+hicTRB_ann <- hicTRB_ann %>%
+  mutate(name = paste0(peak, "|", feature)) %>%
+  dplyr::select(seqnames, start, end, width, strand, score, name)
+
+hicTRA_bed_data <- data.frame(chromosome = hicTRA_ann$seqnames, start = hicTRA_ann$start, end = hicTRA_ann$end, name = hicTRA_ann$name, score = 0, strand = '.')
+hicTRB_bed_data <- data.frame(chromosome = hicTRB_ann$seqnames, start = hicTRB_ann$start, end = hicTRB_ann$end, name = hicTRB_ann$name, score = 0, strand = '.')
+
+
+### DO ATAC ###
+
+ATAC_DO <- read.table("/rds/general/user/kmt23/ephemeral/data/concat/mcf7_atac_nfr.bed")
+
+ATAC_DO <- ATAC_DO %>%
+  dplyr::rename(chromosome = V1, start = V2, end = V3, score = V5, strand = V6) %>%
+  mutate(name = paste0("KTdO", 1:nrow(ATAC_DO))) %>%
+  dplyr::select(chromosome, start, end, name, score, strand)
+
+ATAC_DO_gr <- toGRanges(ATAC_DO, format = 'BED')
+
+
+
+hicTRA <- toGRanges(hicTRA_bed_data, format = 'BED')
+hicTRB <- toGRanges(hicTRB_bed_data, format = 'BED')
+
+hicTRA_anno <- annotatePeakInBatch(myPeakList = hicTRA, AnnotationData = ATAC_DO_gr, output = 'overlapping', multiple = TRUE)
+hicTRB_anno <- annotatePeakInBatch(myPeakList = hicTRB, AnnotationData = ATAC_DO_gr, output = 'overlapping', multiple = TRUE)
+
+hicTRA_ann <- as.data.frame(hicTRA_anno)
+hicTRB_ann <- as.data.frame(hicTRB_anno)
+
+hicTRA_ann <- hicTRA_ann %>%
+  mutate(name = paste0(peak, "|", feature)) %>%
+  dplyr::select(seqnames, start, end, width, strand, score, name)
+hicTRB_ann <- hicTRB_ann %>%
+  mutate(name = paste0(peak, "|", feature)) %>%
+  dplyr::select(seqnames, start, end, width, strand, score, name)
+
+hicTRA_bed_data <- data.frame(chromosome = hicTRA_ann$seqnames, start = hicTRA_ann$start, end = hicTRA_ann$end, name = hicTRA_ann$name, score = 0, strand = '.')
+hicTRB_bed_data <- data.frame(chromosome = hicTRB_ann$seqnames, start = hicTRB_ann$start, end = hicTRB_ann$end, name = hicTRB_ann$name, score = 0, strand = '.')
+
+
+
+
+
+### Treated H3K27Ac ### 
+
+H3K27Ac_tr <- read.table("/rds/general/user/kmt23/ephemeral/data/concat/11_Treated5_H3K27Ac_peaks.bed_tr.bed")
+
+H3K27Ac_tr <- H3K27Ac_tr %>%
+  dplyr::rename(chromosome = V1, start = V2, end = V3) %>%
+  mutate(name = paste0("KTAcTR", 1:nrow(H3K27Ac_tr))) %>%
+  dplyr::select(chromosome, start, end, name)
+
+H3K27Ac_tr_gr <- toGRanges(H3K27Ac_tr, format = 'BED')
+
+
+hicTRA <- toGRanges(hicTRA_bed_data, format = 'BED')
+hicTRB <- toGRanges(hicTRB_bed_data, format = 'BED')
+
+hicTRA_anno <- annotatePeakInBatch(myPeakList = hicTRA, AnnotationData = H3K27Ac_tr_gr, output = 'overlapping', multiple = TRUE)
+hicTRB_anno <- annotatePeakInBatch(myPeakList = hicTRB, AnnotationData = H3K27Ac_tr_gr, output = 'overlapping', multiple = TRUE)
+
+hicTRA_ann <- as.data.frame(hicTRA_anno)
+hicTRB_ann <- as.data.frame(hicTRB_anno)
+
+hicTRA_ann <- hicTRA_ann %>%
+  mutate(name = paste0(peak, "|", feature)) %>%
+  dplyr::select(seqnames, start, end, width, strand, score, name)
+hicTRB_ann <- hicTRB_ann %>%
+  mutate(name = paste0(peak, "|", feature)) %>%
+  dplyr::select(seqnames, start, end, width, strand, score, name)
+
+hicTRA_bed_data <- data.frame(chromosome = hicTRA_ann$seqnames, start = hicTRA_ann$start, end = hicTRA_ann$end, name = hicTRA_ann$name, score = 0, strand = '.')
+hicTRB_bed_data <- data.frame(chromosome = hicTRB_ann$seqnames, start = hicTRB_ann$start, end = hicTRB_ann$end, name = hicTRB_ann$name, score = 0, strand = '.')
+
+
+
+### Treated H3K4Me3 ### 
+
+
+H3K4Me3_tr <- read.table("/rds/general/user/kmt23/ephemeral/data/concat/03_Treated1_H3K4Me3_peaks.bed_tr.bed")
+
+H3K4Me3_tr <- H3K4Me3_tr %>%
+  dplyr::rename(chromosome = V1, start = V2, end = V3) %>%
+  mutate(name = paste0("KTMe3TR", 1:nrow(H3K4Me3_tr))) %>%
+  dplyr::select(chromosome, start, end, name)
+
+H3K4Me3_tr_gr <- toGRanges(H3K4Me3_tr, format = 'BED')
+
+
+
+hicTRA <- toGRanges(hicTRA_bed_data, format = 'BED')
+hicTRB <- toGRanges(hicTRB_bed_data, format = 'BED')
+
+hicTRA_anno <- annotatePeakInBatch(myPeakList = hicTRA, AnnotationData = H3K4Me3_tr_gr, output = 'overlapping', multiple = TRUE)
+hicTRB_anno <- annotatePeakInBatch(myPeakList = hicTRB, AnnotationData = H3K4Me3_tr_gr, output = 'overlapping', multiple = TRUE)
+
+hicTRA_ann <- as.data.frame(hicTRA_anno)
+hicTRB_ann <- as.data.frame(hicTRB_anno)
+
+hicTRA_ann <- hicTRA_ann %>%
+  mutate(name = paste0(peak, "|", feature)) %>%
+  dplyr::select(seqnames, start, end, width, strand, score, name)
+hicTRB_ann <- hicTRB_ann %>%
+  mutate(name = paste0(peak, "|", feature)) %>%
+  dplyr::select(seqnames, start, end, width, strand, score, name)
+
+hicTRA_bed_data <- data.frame(chromosome = hicTRA_ann$seqnames, start = hicTRA_ann$start, end = hicTRA_ann$end, name = hicTRA_ann$name, score = 0, strand = '.')
+hicTRB_bed_data <- data.frame(chromosome = hicTRB_ann$seqnames, start = hicTRB_ann$start, end = hicTRB_ann$end, name = hicTRB_ann$name, score = 0, strand = '.')
+
+
+### Treated ATAC ###
+
+ATAC_tr <- read.table("/rds/general/user/kmt23/ephemeral/data/concat/sorted_1_0A5L_01JKMRC_BrCa-TREATED-1_ATAC_hs_i201_r1.fastq.sam_noM.bam_ASF.bam_MACS_ATACSeq_NFR_Peaks_peaks.bed_tr.bed")
+
+ATAC_tr <- ATAC_tr %>%
+  dplyr::rename(chromosome = V1, start = V2, end = V3) %>%
+  mutate(name = paste0("KTATACTR", 1:nrow(ATAC_tr))) %>%
+  dplyr::select(chromosome, start, end, name)
+
+ATAC_tr_gr <- toGRanges(ATAC_tr, format = 'BED')
+
+
+hicTRA <- toGRanges(hicTRA_bed_data, format = 'BED')
+hicTRB <- toGRanges(hicTRB_bed_data, format = 'BED')
+
+hicTRA_anno <- annotatePeakInBatch(myPeakList = hicTRA, AnnotationData = ATAC_tr_gr, output = 'overlapping', multiple = TRUE)
+hicTRB_anno <- annotatePeakInBatch(myPeakList = hicTRB, AnnotationData = ATAC_tr_gr, output = 'overlapping', multiple = TRUE)
+
+hicTRA_ann <- as.data.frame(hicTRA_anno)
+hicTRB_ann <- as.data.frame(hicTRB_anno)
+
+hicTRA_ann <- hicTRA_ann %>%
+  mutate(name = paste0(peak, "|", feature)) %>%
+  dplyr::select(seqnames, start, end, width, strand, score, name)
+hicTRB_ann <- hicTRB_ann %>%
+  mutate(name = paste0(peak, "|", feature)) %>%
+  dplyr::select(seqnames, start, end, width, strand, score, name)
+
+hicTRA_bed_data <- data.frame(chromosome = hicTRA_ann$seqnames, start = hicTRA_ann$start, end = hicTRA_ann$end, name = hicTRA_ann$name, score = 0, strand = '.')
+hicTRB_bed_data <- data.frame(chromosome = hicTRB_ann$seqnames, start = hicTRB_ann$start, end = hicTRB_ann$end, name = hicTRB_ann$name, score = 0, strand = '.')
+
+
+### Treated H3K4Me1
+
+H3K4Me1_tr <- read.table("/rds/general/user/kmt23/ephemeral/data/concat/07_Treated3_H3K4Me1_peaks.bed_tr.bed")
+H3K4Me1_tr <- H3K4Me1_tr %>% dplyr::rename(chromosome = V1, start = V2, end = V3) %>% mutate(name = paste0("KTMe1TR", 1:nrow(H3K4Me1_tr))) %>% dplyr::select(chromosome, start, end, name)
+
+H3K4Me1_tr_gr <- toGRanges(H3K4Me1_tr, format = 'BED')
+
+
+hicTRA <- toGRanges(hicTRA_bed_data, format = 'BED')
+hicTRB <- toGRanges(hicTRB_bed_data, format = 'BED')
+
+hicTRA_anno <- annotatePeakInBatch(myPeakList = hicTRA, AnnotationData = H3K4Me1_tr_gr, output = 'overlapping', multiple = TRUE)
+hicTRB_anno <- annotatePeakInBatch(myPeakList = hicTRB, AnnotationData = H3K4Me1_tr_gr, output = 'overlapping', multiple = TRUE)
+
+hicTRA_ann <- as.data.frame(hicTRA_anno)
+hicTRB_ann <- as.data.frame(hicTRB_anno)
+
+hicTRA_ann <- hicTRA_ann %>%
+  mutate(name = paste0(peak, "|", feature)) %>%
+  dplyr::select(seqnames, start, end, width, strand, score, name)
+hicTRB_ann <- hicTRB_ann %>%
+  mutate(name = paste0(peak, "|", feature)) %>%
+  dplyr::select(seqnames, start, end, width, strand, score, name)
+
+hicTRA_bed_data <- data.frame(chromosome = hicTRA_ann$seqnames, start = hicTRA_ann$start, end = hicTRA_ann$end, name = hicTRA_ann$name, score = 0, strand = '.')
+hicTRB_bed_data <- data.frame(chromosome = hicTRB_ann$seqnames, start = hicTRB_ann$start, end = hicTRB_ann$end, name = hicTRB_ann$name, score = 0, strand = '.')
+
+hicTRA_separated <- hicTRA_bed_data %>%
+  separate(name, into = c("Int_ID", "DE_genes", "Dif_H3K27Ac", "Dif_H3K4Me3", "Dif_H3K4Me1", "Dif_ATAC", "H3K27AcTR", "H3K4Me3TR", "ATACTR", "H3K4Me1TR"), sep = "[.|]")
+hicTRB_separated <- hicTRB_bed_data %>%
+  separate(name, into = c("Int_ID", "DE_genes", "Dif_H3K27Ac", "Dif_H3K4Me3", "Dif_H3K4Me1", "Dif_ATAC", "H3K27AcTR", "H3K4Me3TR", "ATACTR", "H3K4Me1TR"), sep = "[.|]")
+
+write_csv(hicTRA_separated, "/rds/general/user/kmt23/ephemeral/data/concat/fithic_tr40_A_treated.csv")
+
+write_csv(hicTRB_separated, "/rds/general/user/kmt23/ephemeral/data/concat/fithic_tr40_B_treated.csv")
+```
+
+## HicCompare Differential Interactions
+
+### Differential peaks
+
+#### 20 kb 
+
+```{r}
+###### HICCOMPARE ###########
+
+# Reading in the output 
+difhic <- read_csv("/rds/general/user/kmt23/ephemeral/data/concat/diff_hiccompare20k.csv")
+
+# Renaming is necessary for filtering; we only take significant interactions going forward, where significant is defined by FDR q-value <= 0.05
+
+difhic$id1 <- paste0("KTdInt", 1:nrow(difhic))
+difhic$id2 <- paste0("KTdInt", 1:nrow(difhic))
+
+difhicA <- difhic %>%
+  dplyr::select(chr1, start1, end1, id1)
+difhicB <- difhic %>%
+  dplyr::select(chr2, start2, end2, id2)
+
+
+hicTRA_bed_data <- data.frame(chromosome = 
+                                 difhicA$chr1, start = 
+                                 difhicA$start1 - 1, end = 
+                                 difhicA$end1, name = 
+                                 difhicA$id1, score = 0, strand = '.')
+
+write.table(hicTRA_bed_data, "/rds/general/user/kmt23/ephemeral/data/concat/difhicA.bed", quote = FALSE, sep = "\t", row.names = FALSE, col.names = FALSE)
+
+hicTRB_bed_data <- data.frame(chromosome = difhicB$chr2, start = difhicB$start2 - 1, end = difhicB$end2, name = difhicB$id2, score = 0, strand = '.')
+
+write.table(hicTRB_bed_data, "/rds/general/user/kmt23/ephemeral/data/concat/difhicB.bed", quote = FALSE, sep = "\t", row.names = FALSE, col.names = FALSE)
+
+###### BIOMART ###########
+
+
+ensembl <- useEnsembl(biomart = "genes", dataset = "hsapiens_gene_ensembl")
+
+mcf7_de_genes <- read_csv("/rds/general/user/kmt23/ephemeral/data/concat/mcf7_RNA_results_all_hgnc.csv")
+
+
+mcf7_de_genes <- mcf7_de_genes %>%
+  dplyr::filter(padj <= 0.05) %>%
+  dplyr::select(ensembl_gene_id)
+
+
+ensembl_ids <- mcf7_de_genes$ensembl_gene_id
+
+genes <- getBM(
+  attributes = c('ensembl_gene_id', 'chromosome_name', 'transcription_start_site', 'strand'),
+  filters = 'ensembl_gene_id',
+  values = ensembl_ids,
+  mart = ensembl
+)
+
+genes <- genes %>%
+  distinct(ensembl_gene_id, .keep_all = TRUE) %>%
+  dplyr::mutate(start = transcription_start_site - 2500) %>%
+  dplyr::mutate(end = transcription_start_site + 2500)
+
+bed_data <- data.frame(chromosome = genes$chromosome_name, start = genes$start, end = genes$end, name = genes$ensembl_gene_id, score = 0, strand = ifelse(genes$strand == 1, "+", "-"))
+
+write.table(bed_data, "/rds/general/user/kmt23/ephemeral/data/concat/de_genes.bed", quote = FALSE, sep = "\t", row.names = FALSE, col.names = FALSE)
+
+###### ChIPpeakAnno ###########
+
+### DE Genes ###
+
+hicTRA <- toGRanges(hicTRA_bed_data, format = 'BED')
+hicTRB <- toGRanges(hicTRB_bed_data, format = 'BED')
+
+
+mcf7_de_gr <- toGRanges(bed_data, format = 'BED')
+
+
+hicTRA_anno <- annotatePeakInBatch(myPeakList = hicTRA, AnnotationData = mcf7_de_gr, output = 'overlapping', multiple = TRUE)
+hicTRB_anno <- annotatePeakInBatch(myPeakList = hicTRB, AnnotationData = mcf7_de_gr, output = 'overlapping', multiple = TRUE)
+
+
+hicTRA_ann <- as.data.frame(hicTRA_anno)
+hicTRB_ann <- as.data.frame(hicTRB_anno)
+
+hicTRA_ann <- hicTRA_ann %>%
+  mutate(name = paste0(peak, "|", feature)) %>%
+  dplyr::select(seqnames, start, end, width, strand, score, name)
+hicTRB_ann <- hicTRB_ann %>%
+  mutate(name = paste0(peak, "|", feature)) %>%
+  dplyr::select(seqnames, start, end, width, strand, score, name)
+
+
+hicTRA_bed_data <- data.frame(chromosome = hicTRA_ann$seqnames, start = hicTRA_ann$start, end = hicTRA_ann$end, name = hicTRA_ann$name, score = 0, strand = '.')
+hicTRB_bed_data <- data.frame(chromosome = hicTRB_ann$seqnames, start = hicTRB_ann$start, end = hicTRB_ann$end, name = hicTRB_ann$name, score = 0, strand = '.')
+
+### DM H3K27Ac ###
+
+H3K27Ac_DM <- read.table("/rds/general/user/kmt23/ephemeral/data/concat/H3K27Acdif.bed")
+
+H3K27Ac_DM <- H3K27Ac_DM %>%
+  dplyr::rename(chromosome = V1, start = V2, end = V3, score = V5, strand = V6) %>%
+  mutate(name = paste0("KTdmAc", 1:nrow(H3K27Ac_DM))) %>%
+  dplyr::select(chromosome, start, end, name, score, strand)
+
+H3K27Ac_DM_gr <- toGRanges(H3K27Ac_DM, format = 'BED')
+
+hicTRA <- toGRanges(hicTRA_bed_data, format = 'BED')
+hicTRB <- toGRanges(hicTRB_bed_data, format = 'BED')
+
+
+hicTRA_anno <- annotatePeakInBatch(myPeakList = hicTRA, AnnotationData = H3K27Ac_DM_gr, output = 'overlapping', multiple = TRUE)
+hicTRB_anno <- annotatePeakInBatch(myPeakList = hicTRB, AnnotationData = H3K27Ac_DM_gr, output = 'overlapping', multiple = TRUE)
+
+
+hicTRA_ann <- as.data.frame(hicTRA_anno)
+hicTRB_ann <- as.data.frame(hicTRB_anno)
+
+
+hicTRA_ann <- hicTRA_ann %>%
+  mutate(name = paste0(peak, "|", feature)) %>%
+  dplyr::select(seqnames, start, end, width, strand, score, name)
+hicTRB_ann <- hicTRB_ann %>%
+  mutate(name = paste0(peak, "|", feature)) %>%
+  dplyr::select(seqnames, start, end, width, strand, score, name)
+
+
+hicTRA_bed_data <- data.frame(chromosome = hicTRA_ann$seqnames, start = hicTRA_ann$start, end = hicTRA_ann$end, name = hicTRA_ann$name, score = 0, strand = '.')
+hicTRB_bed_data <- data.frame(chromosome = hicTRB_ann$seqnames, start = hicTRB_ann$start, end = hicTRB_ann$end, name = hicTRB_ann$name, score = 0, strand = '.')
+
+
+### DM H3K4Me3 ###
+
+H3K4Me3_DM <- read.table("/rds/general/user/kmt23/ephemeral/data/concat/H3K4Me3dif.bed")
+
+H3K4Me3_DM <- H3K4Me3_DM %>%
+  dplyr::rename(chromosome = V1, start = V2, end = V3, score = V5, strand = V6) %>%
+  mutate(name = paste0("KTdmMe3", 1:nrow(H3K4Me3_DM))) %>%
+  dplyr::select(chromosome, start, end, name, score, strand)
+
+H3K4Me3_DM_gr <- toGRanges(H3K4Me3_DM, format = 'BED')
+
+
+hicTRA <- toGRanges(hicTRA_bed_data, format = 'BED')
+hicTRB <- toGRanges(hicTRB_bed_data, format = 'BED')
+
+hicTRA_anno <- annotatePeakInBatch(myPeakList = hicTRA, AnnotationData = H3K4Me3_DM_gr, output = 'overlapping', multiple = TRUE)
+hicTRB_anno <- annotatePeakInBatch(myPeakList = hicTRB, AnnotationData = H3K4Me3_DM_gr, output = 'overlapping', multiple = TRUE)
+
+hicTRA_ann <- as.data.frame(hicTRA_anno)
+hicTRB_ann <- as.data.frame(hicTRB_anno)
+
+hicTRA_ann <- hicTRA_ann %>%
+  mutate(name = paste0(peak, "|", feature)) %>%
+  dplyr::select(seqnames, start, end, width, strand, score, name)
+hicTRB_ann <- hicTRB_ann %>%
+  mutate(name = paste0(peak, "|", feature)) %>%
+  dplyr::select(seqnames, start, end, width, strand, score, name)
+
+hicTRA_bed_data <- data.frame(chromosome = hicTRA_ann$seqnames, start = hicTRA_ann$start, end = hicTRA_ann$end, name = hicTRA_ann$name, score = 0, strand = '.')
+hicTRB_bed_data <- data.frame(chromosome = hicTRB_ann$seqnames, start = hicTRB_ann$start, end = hicTRB_ann$end, name = hicTRB_ann$name, score = 0, strand = '.')
+
+
+
+### DM H3K4Me1 ###
+H3K4Me1_DM <- read.table("/rds/general/user/kmt23/ephemeral/data/concat/H3K4Me1dif.bed")
+
+H3K4Me1_DM <- H3K4Me1_DM %>%
+  dplyr::rename(chromosome = V1, start = V2, end = V3, score = V5, strand = V6) %>%
+  mutate(name = paste0("KTdmMe1", 1:nrow(H3K4Me1_DM))) %>%
+  dplyr::select(chromosome, start, end, name, score, strand)
+
+H3K4Me1_DM_gr <- toGRanges(H3K4Me1_DM, format = 'BED')
+
+
+hicTRA <- toGRanges(hicTRA_bed_data, format = 'BED')
+hicTRB <- toGRanges(hicTRB_bed_data, format = 'BED')
+
+hicTRA_anno <- annotatePeakInBatch(myPeakList = hicTRA, AnnotationData = H3K4Me1_DM_gr, output = 'overlapping', multiple = TRUE)
+hicTRB_anno <- annotatePeakInBatch(myPeakList = hicTRB, AnnotationData = H3K4Me1_DM_gr, output = 'overlapping', multiple = TRUE)
+
+hicTRA_ann <- as.data.frame(hicTRA_anno)
+hicTRB_ann <- as.data.frame(hicTRB_anno)
+
+hicTRA_ann <- hicTRA_ann %>%
+  mutate(name = paste0(peak, "|", feature)) %>%
+  dplyr::select(seqnames, start, end, width, strand, score, name)
+hicTRB_ann <- hicTRB_ann %>%
+  mutate(name = paste0(peak, "|", feature)) %>%
+  dplyr::select(seqnames, start, end, width, strand, score, name)
+
+hicTRA_bed_data <- data.frame(chromosome = hicTRA_ann$seqnames, start = hicTRA_ann$start, end = hicTRA_ann$end, name = hicTRA_ann$name, score = 0, strand = '.')
+hicTRB_bed_data <- data.frame(chromosome = hicTRB_ann$seqnames, start = hicTRB_ann$start, end = hicTRB_ann$end, name = hicTRB_ann$name, score = 0, strand = '.')
+
+
+### DO ATAC ###
+
+ATAC_DO <- read.table("/rds/general/user/kmt23/ephemeral/data/concat/mcf7_atac_nfr.bed")
+
+ATAC_DO <- ATAC_DO %>%
+  dplyr::rename(chromosome = V1, start = V2, end = V3, score = V5, strand = V6) %>%
+  mutate(name = paste0("KTdO", 1:nrow(ATAC_DO))) %>%
+  dplyr::select(chromosome, start, end, name, score, strand)
+
+ATAC_DO_gr <- toGRanges(ATAC_DO, format = 'BED')
+
+
+
+hicTRA <- toGRanges(hicTRA_bed_data, format = 'BED')
+hicTRB <- toGRanges(hicTRB_bed_data, format = 'BED')
+
+hicTRA_anno <- annotatePeakInBatch(myPeakList = hicTRA, AnnotationData = ATAC_DO_gr, output = 'overlapping', multiple = TRUE)
+hicTRB_anno <- annotatePeakInBatch(myPeakList = hicTRB, AnnotationData = ATAC_DO_gr, output = 'overlapping', multiple = TRUE)
+
+hicTRA_ann <- as.data.frame(hicTRA_anno)
+hicTRB_ann <- as.data.frame(hicTRB_anno)
+
+hicTRA_ann <- hicTRA_ann %>%
+  mutate(name = paste0(peak, "|", feature)) %>%
+  dplyr::select(seqnames, start, end, width, strand, score, name)
+hicTRB_ann <- hicTRB_ann %>%
+  mutate(name = paste0(peak, "|", feature)) %>%
+  dplyr::select(seqnames, start, end, width, strand, score, name)
+
+hicTRA_bed_data <- data.frame(chromosome = hicTRA_ann$seqnames, start = hicTRA_ann$start, end = hicTRA_ann$end, name = hicTRA_ann$name, score = 0, strand = '.')
+hicTRB_bed_data <- data.frame(chromosome = hicTRB_ann$seqnames, start = hicTRB_ann$start, end = hicTRB_ann$end, name = hicTRB_ann$name, score = 0, strand = '.')
+
+
+### All H3K27Ac ### 
+
+H3K27Ac <- read.table("/rds/general/user/kmt23/ephemeral/data/concat/09_Control5_H3K27Ac_peaks.bed_fin.bed")
+
+H3K27Ac <- H3K27Ac %>%
+  dplyr::rename(chromosome = V1, start = V2, end = V3) %>%
+  mutate(name = paste0("KTAc", 1:nrow(H3K27Ac))) %>%
+  dplyr::select(chromosome, start, end, name)
+
+H3K27Ac_gr <- toGRanges(H3K27Ac, format = 'BED')
+
+
+
+hicTRA <- toGRanges(hicTRA_bed_data, format = 'BED')
+hicTRB <- toGRanges(hicTRB_bed_data, format = 'BED')
+
+hicTRA_anno <- annotatePeakInBatch(myPeakList = hicTRA, AnnotationData = H3K27Ac_gr, output = 'overlapping', multiple = TRUE)
+hicTRB_anno <- annotatePeakInBatch(myPeakList = hicTRB, AnnotationData = H3K27Ac_gr, output = 'overlapping', multiple = TRUE)
+
+hicTRA_ann <- as.data.frame(hicTRA_anno)
+hicTRB_ann <- as.data.frame(hicTRB_anno)
+
+hicTRA_ann <- hicTRA_ann %>%
+  mutate(name = paste0(peak, "|", feature)) %>%
+  dplyr::select(seqnames, start, end, width, strand, score, name)
+hicTRB_ann <- hicTRB_ann %>%
+  mutate(name = paste0(peak, "|", feature)) %>%
+  dplyr::select(seqnames, start, end, width, strand, score, name)
+
+hicTRA_bed_data <- data.frame(chromosome = hicTRA_ann$seqnames, start = hicTRA_ann$start, end = hicTRA_ann$end, name = hicTRA_ann$name, score = 0, strand = '.')
+hicTRB_bed_data <- data.frame(chromosome = hicTRB_ann$seqnames, start = hicTRB_ann$start, end = hicTRB_ann$end, name = hicTRB_ann$name, score = 0, strand = '.')
+
+
+
+### All H3K4Me1 ###
+
+H3K4Me3 <- read.table("/rds/general/user/kmt23/ephemeral/data/concat/01_Control1_H3K4Me3_peaks.bed_fin.bed")
+
+H3K4Me3 <- H3K4Me3 %>%
+  dplyr::rename(chromosome = V1, start = V2, end = V3) %>%
+  mutate(name = paste0("KTMe3", 1:nrow(H3K4Me3))) %>%
+  dplyr::select(chromosome, start, end, name)
+
+H3K4Me3_gr <- toGRanges(H3K4Me3, format = 'BED')
+
+
+
+hicTRA <- toGRanges(hicTRA_bed_data, format = 'BED')
+hicTRB <- toGRanges(hicTRB_bed_data, format = 'BED')
+
+hicTRA_anno <- annotatePeakInBatch(myPeakList = hicTRA, AnnotationData = H3K4Me3_gr, output = 'overlapping', multiple = TRUE)
+hicTRB_anno <- annotatePeakInBatch(myPeakList = hicTRB, AnnotationData = H3K4Me3_gr, output = 'overlapping', multiple = TRUE)
+
+hicTRA_ann <- as.data.frame(hicTRA_anno)
+hicTRB_ann <- as.data.frame(hicTRB_anno)
+
+hicTRA_ann <- hicTRA_ann %>%
+  mutate(name = paste0(peak, "|", feature)) %>%
+  dplyr::select(seqnames, start, end, width, strand, score, name)
+hicTRB_ann <- hicTRB_ann %>%
+  mutate(name = paste0(peak, "|", feature)) %>%
+  dplyr::select(seqnames, start, end, width, strand, score, name)
+
+hicTRA_bed_data <- data.frame(chromosome = hicTRA_ann$seqnames, start = hicTRA_ann$start, end = hicTRA_ann$end, name = hicTRA_ann$name, score = 0, strand = '.')
+hicTRB_bed_data <- data.frame(chromosome = hicTRB_ann$seqnames, start = hicTRB_ann$start, end = hicTRB_ann$end, name = hicTRB_ann$name, score = 0, strand = '.')
+
+
+### All ATAC ###
+
+ATAC <- read.table("/rds/general/user/kmt23/ephemeral/data/concat/sorted_1_0A5L_01JKMRC_BrCa-TREATED-1_ATAC_hs_i201_r1.fastq.sam_noM.bam_ASF.bam_MACS_ATACSeq_NFR_Peaks_peaks.bed_j.bed")
+
+ATAC <- ATAC %>%
+  dplyr::rename(chromosome = V1, start = V2, end = V3) %>%
+  mutate(name = paste0("KTATAC", 1:nrow(ATAC))) %>%
+  dplyr::select(chromosome, start, end, name)
+
+ATAC_gr <- toGRanges(ATAC, format = 'BED')
+
+
+hicTRA <- toGRanges(hicTRA_bed_data, format = 'BED')
+hicTRB <- toGRanges(hicTRB_bed_data, format = 'BED')
+
+hicTRA_anno <- annotatePeakInBatch(myPeakList = hicTRA, AnnotationData = ATAC_gr, output = 'overlapping', multiple = TRUE)
+hicTRB_anno <- annotatePeakInBatch(myPeakList = hicTRB, AnnotationData = ATAC_gr, output = 'overlapping', multiple = TRUE)
+
+hicTRA_ann <- as.data.frame(hicTRA_anno)
+hicTRB_ann <- as.data.frame(hicTRB_anno)
+
+hicTRA_ann <- hicTRA_ann %>%
+  mutate(name = paste0(peak, "|", feature)) %>%
+  dplyr::select(seqnames, start, end, width, strand, score, name)
+hicTRB_ann <- hicTRB_ann %>%
+  mutate(name = paste0(peak, "|", feature)) %>%
+  dplyr::select(seqnames, start, end, width, strand, score, name)
+
+hicTRA_bed_data <- data.frame(chromosome = hicTRA_ann$seqnames, start = hicTRA_ann$start, end = hicTRA_ann$end, name = hicTRA_ann$name, score = 0, strand = '.')
+hicTRB_bed_data <- data.frame(chromosome = hicTRB_ann$seqnames, start = hicTRB_ann$start, end = hicTRB_ann$end, name = hicTRB_ann$name, score = 0, strand = '.')
+
+
+
+### All H3K4Me1
+
+H3K4Me1 <- read.table("/rds/general/user/kmt23/ephemeral/data/concat/05_Control3_H3K4Me1_peaks.bed_fin.bed")
+H3K4Me1 <- H3K4Me1 %>% dplyr::rename(chromosome = V1, start = V2, end = V3) %>% mutate(name = paste0("KTMe1", 1:nrow(H3K4Me1))) %>% dplyr::select(chromosome, start, end, name)
+
+H3K4Me1_gr <- toGRanges(H3K4Me1, format = 'BED')
+
+
+
+
+hicTRA <- toGRanges(hicTRA_bed_data, format = 'BED')
+hicTRB <- toGRanges(hicTRB_bed_data, format = 'BED')
+
+hicTRA_anno <- annotatePeakInBatch(myPeakList = hicTRA, AnnotationData = H3K4Me1_gr, output = 'overlapping', multiple = TRUE)
+hicTRB_anno <- annotatePeakInBatch(myPeakList = hicTRB, AnnotationData = H3K4Me1_gr, output = 'overlapping', multiple = TRUE)
+
+hicTRA_ann <- as.data.frame(hicTRA_anno)
+hicTRB_ann <- as.data.frame(hicTRB_anno)
+
+hicTRA_ann <- hicTRA_ann %>%
+  mutate(name = paste0(peak, "|", feature)) %>%
+  dplyr::select(seqnames, start, end, width, strand, score, name)
+hicTRB_ann <- hicTRB_ann %>%
+  mutate(name = paste0(peak, "|", feature)) %>%
+  dplyr::select(seqnames, start, end, width, strand, score, name)
+
+hicTRA_bed_data <- data.frame(chromosome = hicTRA_ann$seqnames, start = hicTRA_ann$start, end = hicTRA_ann$end, name = hicTRA_ann$name, score = 0, strand = '.')
+hicTRB_bed_data <- data.frame(chromosome = hicTRB_ann$seqnames, start = hicTRB_ann$start, end = hicTRB_ann$end, name = hicTRB_ann$name, score = 0, strand = '.')
+
+
+
+hicTRA_separated <- hicTRA_bed_data %>%
+  separate(name, into = c("Int_ID", "DE_genes", "Dif_H3K27Ac", "Dif_H3K4Me3", "Dif_H3K4Me1", "Dif_ATAC", "H3K27Ac", "H3K4Me3", "ATAC", "H3K4Me1"), sep = "[.|]")
+hicTRB_separated <- hicTRB_bed_data %>%
+  separate(name, into = c("Int_ID", "DE_genes", "Dif_H3K27Ac", "Dif_H3K4Me3", "Dif_H3K4Me1", "Dif_ATAC", "H3K27Ac", "H3K4Me3", "ATAC", "H3K4Me1"), sep = "[.|]")
+
+write_csv(hicTRA_separated, "/rds/general/user/kmt23/ephemeral/data/concat/hicompare_20_A_all.csv")
+
+write_csv(hicTRB_separated, "/rds/general/user/kmt23/ephemeral/data/concat/hicompare_20_B_all.csv")
+```
+
+#### 40 kb 
+
+```{r}
+###### HICCOMPARE ###########
+
+# Reading in the output 
+difhic <- read_csv("/rds/general/user/kmt23/ephemeral/data/concat/diff_hiccompare40k.csv")
+
+# Renaming is necessary for filtering; we only take significant interactions going forward, where significant is defined by FDR q-value <= 0.05
+
+difhic$id1 <- paste0("KTdInt", 1:nrow(difhic))
+difhic$id2 <- paste0("KTdInt", 1:nrow(difhic))
+
+difhicA <- difhic %>%
+  dplyr::select(chr1, start1, end1, id1)
+difhicB <- difhic %>%
+  dplyr::select(chr2, start2, end2, id2)
+
+
+hicTRA_bed_data <- data.frame(chromosome = 
+                                 difhicA$chr1, start = 
+                                 difhicA$start1 - 1, end = 
+                                 difhicA$end1, name = 
+                                 difhicA$id1, score = 0, strand = '.')
+
+write.table(hicTRA_bed_data, "/rds/general/user/kmt23/ephemeral/data/concat/difhicA.bed", quote = FALSE, sep = "\t", row.names = FALSE, col.names = FALSE)
+
+hicTRB_bed_data <- data.frame(chromosome = difhicB$chr2, start = difhicB$start2 - 1, end = difhicB$end2, name = difhicB$id2, score = 0, strand = '.')
+
+write.table(hicTRB_bed_data, "/rds/general/user/kmt23/ephemeral/data/concat/difhicB.bed", quote = FALSE, sep = "\t", row.names = FALSE, col.names = FALSE)
+
+###### BIOMART ###########
+
+
+ensembl <- useEnsembl(biomart = "genes", dataset = "hsapiens_gene_ensembl")
+
+mcf7_de_genes <- read_csv("/rds/general/user/kmt23/ephemeral/data/concat/mcf7_RNA_results_all_hgnc.csv")
+
+
+mcf7_de_genes <- mcf7_de_genes %>%
+  dplyr::filter(padj <= 0.05) %>%
+  dplyr::select(ensembl_gene_id)
+
+
+ensembl_ids <- mcf7_de_genes$ensembl_gene_id
+
+genes <- getBM(
+  attributes = c('ensembl_gene_id', 'chromosome_name', 'transcription_start_site', 'strand'),
+  filters = 'ensembl_gene_id',
+  values = ensembl_ids,
+  mart = ensembl
+)
+
+genes <- genes %>%
+  distinct(ensembl_gene_id, .keep_all = TRUE) %>%
+  dplyr::mutate(start = transcription_start_site - 2500) %>%
+  dplyr::mutate(end = transcription_start_site + 2500)
+
+bed_data <- data.frame(chromosome = genes$chromosome_name, start = genes$start, end = genes$end, name = genes$ensembl_gene_id, score = 0, strand = ifelse(genes$strand == 1, "+", "-"))
+
+write.table(bed_data, "/rds/general/user/kmt23/ephemeral/data/concat/de_genes.bed", quote = FALSE, sep = "\t", row.names = FALSE, col.names = FALSE)
+
+###### ChIPpeakAnno ###########
+
+### DE Genes ###
+
+hicTRA <- toGRanges(hicTRA_bed_data, format = 'BED')
+hicTRB <- toGRanges(hicTRB_bed_data, format = 'BED')
+
+
+mcf7_de_gr <- toGRanges(bed_data, format = 'BED')
+
+
+hicTRA_anno <- annotatePeakInBatch(myPeakList = hicTRA, AnnotationData = mcf7_de_gr, output = 'overlapping', multiple = TRUE)
+hicTRB_anno <- annotatePeakInBatch(myPeakList = hicTRB, AnnotationData = mcf7_de_gr, output = 'overlapping', multiple = TRUE)
+
+
+hicTRA_ann <- as.data.frame(hicTRA_anno)
+hicTRB_ann <- as.data.frame(hicTRB_anno)
+
+hicTRA_ann <- hicTRA_ann %>%
+  mutate(name = paste0(peak, "|", feature)) %>%
+  dplyr::select(seqnames, start, end, width, strand, score, name)
+hicTRB_ann <- hicTRB_ann %>%
+  mutate(name = paste0(peak, "|", feature)) %>%
+  dplyr::select(seqnames, start, end, width, strand, score, name)
+
+
+hicTRA_bed_data <- data.frame(chromosome = hicTRA_ann$seqnames, start = hicTRA_ann$start, end = hicTRA_ann$end, name = hicTRA_ann$name, score = 0, strand = '.')
+hicTRB_bed_data <- data.frame(chromosome = hicTRB_ann$seqnames, start = hicTRB_ann$start, end = hicTRB_ann$end, name = hicTRB_ann$name, score = 0, strand = '.')
+
+### DM H3K27Ac ###
+
+H3K27Ac_DM <- read.table("/rds/general/user/kmt23/ephemeral/data/concat/H3K27Acdif.bed")
+
+H3K27Ac_DM <- H3K27Ac_DM %>%
+  dplyr::rename(chromosome = V1, start = V2, end = V3, score = V5, strand = V6) %>%
+  mutate(name = paste0("KTdmAc", 1:nrow(H3K27Ac_DM))) %>%
+  dplyr::select(chromosome, start, end, name, score, strand)
+
+H3K27Ac_DM_gr <- toGRanges(H3K27Ac_DM, format = 'BED')
+
+hicTRA <- toGRanges(hicTRA_bed_data, format = 'BED')
+hicTRB <- toGRanges(hicTRB_bed_data, format = 'BED')
+
+
+hicTRA_anno <- annotatePeakInBatch(myPeakList = hicTRA, AnnotationData = H3K27Ac_DM_gr, output = 'overlapping', multiple = TRUE)
+hicTRB_anno <- annotatePeakInBatch(myPeakList = hicTRB, AnnotationData = H3K27Ac_DM_gr, output = 'overlapping', multiple = TRUE)
+
+
+hicTRA_ann <- as.data.frame(hicTRA_anno)
+hicTRB_ann <- as.data.frame(hicTRB_anno)
+
+
+hicTRA_ann <- hicTRA_ann %>%
+  mutate(name = paste0(peak, "|", feature)) %>%
+  dplyr::select(seqnames, start, end, width, strand, score, name)
+hicTRB_ann <- hicTRB_ann %>%
+  mutate(name = paste0(peak, "|", feature)) %>%
+  dplyr::select(seqnames, start, end, width, strand, score, name)
+
+
+hicTRA_bed_data <- data.frame(chromosome = hicTRA_ann$seqnames, start = hicTRA_ann$start, end = hicTRA_ann$end, name = hicTRA_ann$name, score = 0, strand = '.')
+hicTRB_bed_data <- data.frame(chromosome = hicTRB_ann$seqnames, start = hicTRB_ann$start, end = hicTRB_ann$end, name = hicTRB_ann$name, score = 0, strand = '.')
+
+
+### DM H3K4Me3 ###
+
+H3K4Me3_DM <- read.table("/rds/general/user/kmt23/ephemeral/data/concat/H3K4Me3dif.bed")
+
+H3K4Me3_DM <- H3K4Me3_DM %>%
+  dplyr::rename(chromosome = V1, start = V2, end = V3, score = V5, strand = V6) %>%
+  mutate(name = paste0("KTdmMe3", 1:nrow(H3K4Me3_DM))) %>%
+  dplyr::select(chromosome, start, end, name, score, strand)
+
+H3K4Me3_DM_gr <- toGRanges(H3K4Me3_DM, format = 'BED')
+
+
+hicTRA <- toGRanges(hicTRA_bed_data, format = 'BED')
+hicTRB <- toGRanges(hicTRB_bed_data, format = 'BED')
+
+hicTRA_anno <- annotatePeakInBatch(myPeakList = hicTRA, AnnotationData = H3K4Me3_DM_gr, output = 'overlapping', multiple = TRUE)
+hicTRB_anno <- annotatePeakInBatch(myPeakList = hicTRB, AnnotationData = H3K4Me3_DM_gr, output = 'overlapping', multiple = TRUE)
+
+hicTRA_ann <- as.data.frame(hicTRA_anno)
+hicTRB_ann <- as.data.frame(hicTRB_anno)
+
+hicTRA_ann <- hicTRA_ann %>%
+  mutate(name = paste0(peak, "|", feature)) %>%
+  dplyr::select(seqnames, start, end, width, strand, score, name)
+hicTRB_ann <- hicTRB_ann %>%
+  mutate(name = paste0(peak, "|", feature)) %>%
+  dplyr::select(seqnames, start, end, width, strand, score, name)
+
+hicTRA_bed_data <- data.frame(chromosome = hicTRA_ann$seqnames, start = hicTRA_ann$start, end = hicTRA_ann$end, name = hicTRA_ann$name, score = 0, strand = '.')
+hicTRB_bed_data <- data.frame(chromosome = hicTRB_ann$seqnames, start = hicTRB_ann$start, end = hicTRB_ann$end, name = hicTRB_ann$name, score = 0, strand = '.')
+
+
+
+### DM H3K4Me1 ###
+H3K4Me1_DM <- read.table("/rds/general/user/kmt23/ephemeral/data/concat/H3K4Me1dif.bed")
+
+H3K4Me1_DM <- H3K4Me1_DM %>%
+  dplyr::rename(chromosome = V1, start = V2, end = V3, score = V5, strand = V6) %>%
+  mutate(name = paste0("KTdmMe1", 1:nrow(H3K4Me1_DM))) %>%
+  dplyr::select(chromosome, start, end, name, score, strand)
+
+H3K4Me1_DM_gr <- toGRanges(H3K4Me1_DM, format = 'BED')
+
+
+hicTRA <- toGRanges(hicTRA_bed_data, format = 'BED')
+hicTRB <- toGRanges(hicTRB_bed_data, format = 'BED')
+
+hicTRA_anno <- annotatePeakInBatch(myPeakList = hicTRA, AnnotationData = H3K4Me1_DM_gr, output = 'overlapping', multiple = TRUE)
+hicTRB_anno <- annotatePeakInBatch(myPeakList = hicTRB, AnnotationData = H3K4Me1_DM_gr, output = 'overlapping', multiple = TRUE)
+
+hicTRA_ann <- as.data.frame(hicTRA_anno)
+hicTRB_ann <- as.data.frame(hicTRB_anno)
+
+hicTRA_ann <- hicTRA_ann %>%
+  mutate(name = paste0(peak, "|", feature)) %>%
+  dplyr::select(seqnames, start, end, width, strand, score, name)
+hicTRB_ann <- hicTRB_ann %>%
+  mutate(name = paste0(peak, "|", feature)) %>%
+  dplyr::select(seqnames, start, end, width, strand, score, name)
+
+hicTRA_bed_data <- data.frame(chromosome = hicTRA_ann$seqnames, start = hicTRA_ann$start, end = hicTRA_ann$end, name = hicTRA_ann$name, score = 0, strand = '.')
+hicTRB_bed_data <- data.frame(chromosome = hicTRB_ann$seqnames, start = hicTRB_ann$start, end = hicTRB_ann$end, name = hicTRB_ann$name, score = 0, strand = '.')
+
+
+### DO ATAC ###
+
+ATAC_DO <- read.table("/rds/general/user/kmt23/ephemeral/data/concat/mcf7_atac_nfr.bed")
+
+ATAC_DO <- ATAC_DO %>%
+  dplyr::rename(chromosome = V1, start = V2, end = V3, score = V5, strand = V6) %>%
+  mutate(name = paste0("KTdO", 1:nrow(ATAC_DO))) %>%
+  dplyr::select(chromosome, start, end, name, score, strand)
+
+ATAC_DO_gr <- toGRanges(ATAC_DO, format = 'BED')
+
+
+
+hicTRA <- toGRanges(hicTRA_bed_data, format = 'BED')
+hicTRB <- toGRanges(hicTRB_bed_data, format = 'BED')
+
+hicTRA_anno <- annotatePeakInBatch(myPeakList = hicTRA, AnnotationData = ATAC_DO_gr, output = 'overlapping', multiple = TRUE)
+hicTRB_anno <- annotatePeakInBatch(myPeakList = hicTRB, AnnotationData = ATAC_DO_gr, output = 'overlapping', multiple = TRUE)
+
+hicTRA_ann <- as.data.frame(hicTRA_anno)
+hicTRB_ann <- as.data.frame(hicTRB_anno)
+
+hicTRA_ann <- hicTRA_ann %>%
+  mutate(name = paste0(peak, "|", feature)) %>%
+  dplyr::select(seqnames, start, end, width, strand, score, name)
+hicTRB_ann <- hicTRB_ann %>%
+  mutate(name = paste0(peak, "|", feature)) %>%
+  dplyr::select(seqnames, start, end, width, strand, score, name)
+
+hicTRA_bed_data <- data.frame(chromosome = hicTRA_ann$seqnames, start = hicTRA_ann$start, end = hicTRA_ann$end, name = hicTRA_ann$name, score = 0, strand = '.')
+hicTRB_bed_data <- data.frame(chromosome = hicTRB_ann$seqnames, start = hicTRB_ann$start, end = hicTRB_ann$end, name = hicTRB_ann$name, score = 0, strand = '.')
+
+
+### All H3K27Ac ### 
+
+H3K27Ac <- read.table("/rds/general/user/kmt23/ephemeral/data/concat/09_Control5_H3K27Ac_peaks.bed_fin.bed")
+
+H3K27Ac <- H3K27Ac %>%
+  dplyr::rename(chromosome = V1, start = V2, end = V3) %>%
+  mutate(name = paste0("KTAc", 1:nrow(H3K27Ac))) %>%
+  dplyr::select(chromosome, start, end, name)
+
+H3K27Ac_gr <- toGRanges(H3K27Ac, format = 'BED')
+
+
+
+hicTRA <- toGRanges(hicTRA_bed_data, format = 'BED')
+hicTRB <- toGRanges(hicTRB_bed_data, format = 'BED')
+
+hicTRA_anno <- annotatePeakInBatch(myPeakList = hicTRA, AnnotationData = H3K27Ac_gr, output = 'overlapping', multiple = TRUE)
+hicTRB_anno <- annotatePeakInBatch(myPeakList = hicTRB, AnnotationData = H3K27Ac_gr, output = 'overlapping', multiple = TRUE)
+
+hicTRA_ann <- as.data.frame(hicTRA_anno)
+hicTRB_ann <- as.data.frame(hicTRB_anno)
+
+hicTRA_ann <- hicTRA_ann %>%
+  mutate(name = paste0(peak, "|", feature)) %>%
+  dplyr::select(seqnames, start, end, width, strand, score, name)
+hicTRB_ann <- hicTRB_ann %>%
+  mutate(name = paste0(peak, "|", feature)) %>%
+  dplyr::select(seqnames, start, end, width, strand, score, name)
+
+hicTRA_bed_data <- data.frame(chromosome = hicTRA_ann$seqnames, start = hicTRA_ann$start, end = hicTRA_ann$end, name = hicTRA_ann$name, score = 0, strand = '.')
+hicTRB_bed_data <- data.frame(chromosome = hicTRB_ann$seqnames, start = hicTRB_ann$start, end = hicTRB_ann$end, name = hicTRB_ann$name, score = 0, strand = '.')
+
+
+
+### All H3K4Me1 ###
+
+H3K4Me3 <- read.table("/rds/general/user/kmt23/ephemeral/data/concat/01_Control1_H3K4Me3_peaks.bed_fin.bed")
+
+H3K4Me3 <- H3K4Me3 %>%
+  dplyr::rename(chromosome = V1, start = V2, end = V3) %>%
+  mutate(name = paste0("KTMe3", 1:nrow(H3K4Me3))) %>%
+  dplyr::select(chromosome, start, end, name)
+
+H3K4Me3_gr <- toGRanges(H3K4Me3, format = 'BED')
+
+
+
+hicTRA <- toGRanges(hicTRA_bed_data, format = 'BED')
+hicTRB <- toGRanges(hicTRB_bed_data, format = 'BED')
+
+hicTRA_anno <- annotatePeakInBatch(myPeakList = hicTRA, AnnotationData = H3K4Me3_gr, output = 'overlapping', multiple = TRUE)
+hicTRB_anno <- annotatePeakInBatch(myPeakList = hicTRB, AnnotationData = H3K4Me3_gr, output = 'overlapping', multiple = TRUE)
+
+hicTRA_ann <- as.data.frame(hicTRA_anno)
+hicTRB_ann <- as.data.frame(hicTRB_anno)
+
+hicTRA_ann <- hicTRA_ann %>%
+  mutate(name = paste0(peak, "|", feature)) %>%
+  dplyr::select(seqnames, start, end, width, strand, score, name)
+hicTRB_ann <- hicTRB_ann %>%
+  mutate(name = paste0(peak, "|", feature)) %>%
+  dplyr::select(seqnames, start, end, width, strand, score, name)
+
+hicTRA_bed_data <- data.frame(chromosome = hicTRA_ann$seqnames, start = hicTRA_ann$start, end = hicTRA_ann$end, name = hicTRA_ann$name, score = 0, strand = '.')
+hicTRB_bed_data <- data.frame(chromosome = hicTRB_ann$seqnames, start = hicTRB_ann$start, end = hicTRB_ann$end, name = hicTRB_ann$name, score = 0, strand = '.')
+
+
+### All ATAC ###
+
+ATAC <- read.table("/rds/general/user/kmt23/ephemeral/data/concat/sorted_1_0A5L_01JKMRC_BrCa-TREATED-1_ATAC_hs_i201_r1.fastq.sam_noM.bam_ASF.bam_MACS_ATACSeq_NFR_Peaks_peaks.bed_j.bed")
+
+ATAC <- ATAC %>%
+  dplyr::rename(chromosome = V1, start = V2, end = V3) %>%
+  mutate(name = paste0("KTATAC", 1:nrow(ATAC))) %>%
+  dplyr::select(chromosome, start, end, name)
+
+ATAC_gr <- toGRanges(ATAC, format = 'BED')
+
+
+hicTRA <- toGRanges(hicTRA_bed_data, format = 'BED')
+hicTRB <- toGRanges(hicTRB_bed_data, format = 'BED')
+
+hicTRA_anno <- annotatePeakInBatch(myPeakList = hicTRA, AnnotationData = ATAC_gr, output = 'overlapping', multiple = TRUE)
+hicTRB_anno <- annotatePeakInBatch(myPeakList = hicTRB, AnnotationData = ATAC_gr, output = 'overlapping', multiple = TRUE)
+
+hicTRA_ann <- as.data.frame(hicTRA_anno)
+hicTRB_ann <- as.data.frame(hicTRB_anno)
+
+hicTRA_ann <- hicTRA_ann %>%
+  mutate(name = paste0(peak, "|", feature)) %>%
+  dplyr::select(seqnames, start, end, width, strand, score, name)
+hicTRB_ann <- hicTRB_ann %>%
+  mutate(name = paste0(peak, "|", feature)) %>%
+  dplyr::select(seqnames, start, end, width, strand, score, name)
+
+hicTRA_bed_data <- data.frame(chromosome = hicTRA_ann$seqnames, start = hicTRA_ann$start, end = hicTRA_ann$end, name = hicTRA_ann$name, score = 0, strand = '.')
+hicTRB_bed_data <- data.frame(chromosome = hicTRB_ann$seqnames, start = hicTRB_ann$start, end = hicTRB_ann$end, name = hicTRB_ann$name, score = 0, strand = '.')
+
+
+
+### All H3K4Me1
+
+H3K4Me1 <- read.table("/rds/general/user/kmt23/ephemeral/data/concat/05_Control3_H3K4Me1_peaks.bed_fin.bed")
+H3K4Me1 <- H3K4Me1 %>% dplyr::rename(chromosome = V1, start = V2, end = V3) %>% mutate(name = paste0("KTMe1", 1:nrow(H3K4Me1))) %>% dplyr::select(chromosome, start, end, name)
+
+H3K4Me1_gr <- toGRanges(H3K4Me1, format = 'BED')
+
+
+
+
+hicTRA <- toGRanges(hicTRA_bed_data, format = 'BED')
+hicTRB <- toGRanges(hicTRB_bed_data, format = 'BED')
+
+hicTRA_anno <- annotatePeakInBatch(myPeakList = hicTRA, AnnotationData = H3K4Me1_gr, output = 'overlapping', multiple = TRUE)
+hicTRB_anno <- annotatePeakInBatch(myPeakList = hicTRB, AnnotationData = H3K4Me1_gr, output = 'overlapping', multiple = TRUE)
+
+hicTRA_ann <- as.data.frame(hicTRA_anno)
+hicTRB_ann <- as.data.frame(hicTRB_anno)
+
+hicTRA_ann <- hicTRA_ann %>%
+  mutate(name = paste0(peak, "|", feature)) %>%
+  dplyr::select(seqnames, start, end, width, strand, score, name)
+hicTRB_ann <- hicTRB_ann %>%
+  mutate(name = paste0(peak, "|", feature)) %>%
+  dplyr::select(seqnames, start, end, width, strand, score, name)
+
+hicTRA_bed_data <- data.frame(chromosome = hicTRA_ann$seqnames, start = hicTRA_ann$start, end = hicTRA_ann$end, name = hicTRA_ann$name, score = 0, strand = '.')
+hicTRB_bed_data <- data.frame(chromosome = hicTRB_ann$seqnames, start = hicTRB_ann$start, end = hicTRB_ann$end, name = hicTRB_ann$name, score = 0, strand = '.')
+
+
+
+hicTRA_separated <- hicTRA_bed_data %>%
+  separate(name, into = c("Int_ID", "DE_genes", "Dif_H3K27Ac", "Dif_H3K4Me3", "Dif_H3K4Me1", "Dif_ATAC", "H3K27Ac", "H3K4Me3", "ATAC", "H3K4Me1"), sep = "[.|]")
+hicTRB_separated <- hicTRB_bed_data %>%
+  separate(name, into = c("Int_ID", "DE_genes", "Dif_H3K27Ac", "Dif_H3K4Me3", "Dif_H3K4Me1", "Dif_ATAC", "H3K27Ac", "H3K4Me3", "ATAC", "H3K4Me1"), sep = "[.|]")
+
+write_csv(hicTRA_separated, "/rds/general/user/kmt23/ephemeral/data/concat/hicompare_40_A_all.csv")
+
+write_csv(hicTRB_separated, "/rds/general/user/kmt23/ephemeral/data/concat/hicompare_40_B_all.csv")
+```
+
+### Peaks shared among treated samples
+
+#### 20 kb
+
+```{r}
+###### HICOMPARE ###########
+
+# Reading in the output 
+difhic <- read_csv("/rds/general/user/kmt23/ephemeral/data/concat/diff_hiccompare20k.csv")
+
+# Renaming is necessary for filtering; we only take significant interactions going forward, where significant is defined by FDR q-value <= 0.05
+
+difhic$id1 <- paste0("KTdInt", 1:nrow(difhic))
+difhic$id2 <- paste0("KTdInt", 1:nrow(difhic))
+
+difhicA <- difhic %>%
+  dplyr::select(chr1, start1, end1, id1)
+difhicB <- difhic %>%
+  dplyr::select(chr2, start2, end2, id2)
+
+
+hicTRA_bed_data <- data.frame(chromosome = 
+                                difhicA$chr1, start = 
+                                difhicA$start1 - 1, end = 
+                                difhicA$end1, name = 
+                                difhicA$id1, score = 0, strand = '.')
+
+write.table(hicTRA_bed_data, "/rds/general/user/kmt23/ephemeral/data/concat/difhicA.bed", quote = FALSE, sep = "\t", row.names = FALSE, col.names = FALSE)
+
+hicTRB_bed_data <- data.frame(chromosome = difhicB$chr2, start = difhicB$start2 - 1, end = difhicB$end2, name = difhicB$id2, score = 0, strand = '.')
+
+write.table(hicTRB_bed_data, "/rds/general/user/kmt23/ephemeral/data/concat/difhicB.bed", quote = FALSE, sep = "\t", row.names = FALSE, col.names = FALSE)
+
+###### BIOMART ###########
+
+
+#ensembl <- useEnsembl(biomart = "genes", dataset = "hsapiens_gene_ensembl")
+
+mcf7_de_genes <- read_csv("/rds/general/user/kmt23/ephemeral/data/concat/mcf7_RNA_results_all_hgnc.csv")
+
+
+mcf7_de_genes <- mcf7_de_genes %>%
+  dplyr::filter(padj <= 0.05) %>%
+  dplyr::select(ensembl_gene_id)
+
+
+ensembl_ids <- mcf7_de_genes$ensembl_gene_id
+
+genes <- getBM(
+  attributes = c('ensembl_gene_id', 'chromosome_name', 'transcription_start_site', 'strand'),
+  filters = 'ensembl_gene_id',
+  values = ensembl_ids,
+  mart = ensembl
+)
+
+genes <- genes %>%
+  distinct(ensembl_gene_id, .keep_all = TRUE) %>%
+  dplyr::mutate(start = transcription_start_site - 2500) %>%
+  dplyr::mutate(end = transcription_start_site + 2500)
+
+bed_data <- data.frame(chromosome = genes$chromosome_name, start = genes$start, end = genes$end, name = genes$ensembl_gene_id, score = 0, strand = ifelse(genes$strand == 1, "+", "-"))
+
+write.table(bed_data, "/rds/general/user/kmt23/ephemeral/data/concat/de_genes.bed", quote = FALSE, sep = "\t", row.names = FALSE, col.names = FALSE)
+
+###### ChIPpeakAnno ###########
+
+### DE Genes ###
+
+hicTRA <- toGRanges(hicTRA_bed_data, format = 'BED')
+hicTRB <- toGRanges(hicTRB_bed_data, format = 'BED')
+
+
+mcf7_de_gr <- toGRanges(bed_data, format = 'BED')
+
+
+hicTRA_anno <- annotatePeakInBatch(myPeakList = hicTRA, AnnotationData = mcf7_de_gr, output = 'overlapping', multiple = TRUE)
+hicTRB_anno <- annotatePeakInBatch(myPeakList = hicTRB, AnnotationData = mcf7_de_gr, output = 'overlapping', multiple = TRUE)
+
+
+hicTRA_ann <- as.data.frame(hicTRA_anno)
+hicTRB_ann <- as.data.frame(hicTRB_anno)
+
+hicTRA_ann <- hicTRA_ann %>%
+  mutate(name = paste0(peak, "|", feature)) %>%
+  dplyr::select(seqnames, start, end, width, strand, score, name)
+hicTRB_ann <- hicTRB_ann %>%
+  mutate(name = paste0(peak, "|", feature)) %>%
+  dplyr::select(seqnames, start, end, width, strand, score, name)
+
+
+hicTRA_bed_data <- data.frame(chromosome = hicTRA_ann$seqnames, start = hicTRA_ann$start, end = hicTRA_ann$end, name = hicTRA_ann$name, score = 0, strand = '.')
+hicTRB_bed_data <- data.frame(chromosome = hicTRB_ann$seqnames, start = hicTRB_ann$start, end = hicTRB_ann$end, name = hicTRB_ann$name, score = 0, strand = '.')
+
+### DM H3K27Ac ###
+
+H3K27Ac_DM <- read.table("/rds/general/user/kmt23/ephemeral/data/concat/H3K27Acdif.bed")
+
+H3K27Ac_DM <- H3K27Ac_DM %>%
+  dplyr::rename(chromosome = V1, start = V2, end = V3, score = V5, strand = V6) %>%
+  mutate(name = paste0("KTdmAc", 1:nrow(H3K27Ac_DM))) %>%
+  dplyr::select(chromosome, start, end, name, score, strand)
+
+H3K27Ac_DM_gr <- toGRanges(H3K27Ac_DM, format = 'BED')
+
+hicTRA <- toGRanges(hicTRA_bed_data, format = 'BED')
+hicTRB <- toGRanges(hicTRB_bed_data, format = 'BED')
+
+
+hicTRA_anno <- annotatePeakInBatch(myPeakList = hicTRA, AnnotationData = H3K27Ac_DM_gr, output = 'overlapping', multiple = TRUE)
+hicTRB_anno <- annotatePeakInBatch(myPeakList = hicTRB, AnnotationData = H3K27Ac_DM_gr, output = 'overlapping', multiple = TRUE)
+
+
+hicTRA_ann <- as.data.frame(hicTRA_anno)
+hicTRB_ann <- as.data.frame(hicTRB_anno)
+
+
+hicTRA_ann <- hicTRA_ann %>%
+  mutate(name = paste0(peak, "|", feature)) %>%
+  dplyr::select(seqnames, start, end, width, strand, score, name)
+hicTRB_ann <- hicTRB_ann %>%
+  mutate(name = paste0(peak, "|", feature)) %>%
+  dplyr::select(seqnames, start, end, width, strand, score, name)
+
+
+hicTRA_bed_data <- data.frame(chromosome = hicTRA_ann$seqnames, start = hicTRA_ann$start, end = hicTRA_ann$end, name = hicTRA_ann$name, score = 0, strand = '.')
+hicTRB_bed_data <- data.frame(chromosome = hicTRB_ann$seqnames, start = hicTRB_ann$start, end = hicTRB_ann$end, name = hicTRB_ann$name, score = 0, strand = '.')
+
+
+### DM H3K4Me3 ###
+
+H3K4Me3_DM <- read.table("/rds/general/user/kmt23/ephemeral/data/concat/H3K4Me3dif.bed")
+
+H3K4Me3_DM <- H3K4Me3_DM %>%
+  dplyr::rename(chromosome = V1, start = V2, end = V3, score = V5, strand = V6) %>%
+  mutate(name = paste0("KTdmMe3", 1:nrow(H3K4Me3_DM))) %>%
+  dplyr::select(chromosome, start, end, name, score, strand)
+
+H3K4Me3_DM_gr <- toGRanges(H3K4Me3_DM, format = 'BED')
+
+
+hicTRA <- toGRanges(hicTRA_bed_data, format = 'BED')
+hicTRB <- toGRanges(hicTRB_bed_data, format = 'BED')
+
+hicTRA_anno <- annotatePeakInBatch(myPeakList = hicTRA, AnnotationData = H3K4Me3_DM_gr, output = 'overlapping', multiple = TRUE)
+hicTRB_anno <- annotatePeakInBatch(myPeakList = hicTRB, AnnotationData = H3K4Me3_DM_gr, output = 'overlapping', multiple = TRUE)
+
+hicTRA_ann <- as.data.frame(hicTRA_anno)
+hicTRB_ann <- as.data.frame(hicTRB_anno)
+
+hicTRA_ann <- hicTRA_ann %>%
+  mutate(name = paste0(peak, "|", feature)) %>%
+  dplyr::select(seqnames, start, end, width, strand, score, name)
+hicTRB_ann <- hicTRB_ann %>%
+  mutate(name = paste0(peak, "|", feature)) %>%
+  dplyr::select(seqnames, start, end, width, strand, score, name)
+
+hicTRA_bed_data <- data.frame(chromosome = hicTRA_ann$seqnames, start = hicTRA_ann$start, end = hicTRA_ann$end, name = hicTRA_ann$name, score = 0, strand = '.')
+hicTRB_bed_data <- data.frame(chromosome = hicTRB_ann$seqnames, start = hicTRB_ann$start, end = hicTRB_ann$end, name = hicTRB_ann$name, score = 0, strand = '.')
+
+
+
+### DM H3K4Me1 ###
+H3K4Me1_DM <- read.table("/rds/general/user/kmt23/ephemeral/data/concat/H3K4Me1dif.bed")
+
+H3K4Me1_DM <- H3K4Me1_DM %>%
+  dplyr::rename(chromosome = V1, start = V2, end = V3, score = V5, strand = V6) %>%
+  mutate(name = paste0("KTdmMe1", 1:nrow(H3K4Me1_DM))) %>%
+  dplyr::select(chromosome, start, end, name, score, strand)
+
+H3K4Me1_DM_gr <- toGRanges(H3K4Me1_DM, format = 'BED')
+
+
+hicTRA <- toGRanges(hicTRA_bed_data, format = 'BED')
+hicTRB <- toGRanges(hicTRB_bed_data, format = 'BED')
+
+hicTRA_anno <- annotatePeakInBatch(myPeakList = hicTRA, AnnotationData = H3K4Me1_DM_gr, output = 'overlapping', multiple = TRUE)
+hicTRB_anno <- annotatePeakInBatch(myPeakList = hicTRB, AnnotationData = H3K4Me1_DM_gr, output = 'overlapping', multiple = TRUE)
+
+hicTRA_ann <- as.data.frame(hicTRA_anno)
+hicTRB_ann <- as.data.frame(hicTRB_anno)
+
+hicTRA_ann <- hicTRA_ann %>%
+  mutate(name = paste0(peak, "|", feature)) %>%
+  dplyr::select(seqnames, start, end, width, strand, score, name)
+hicTRB_ann <- hicTRB_ann %>%
+  mutate(name = paste0(peak, "|", feature)) %>%
+  dplyr::select(seqnames, start, end, width, strand, score, name)
+
+hicTRA_bed_data <- data.frame(chromosome = hicTRA_ann$seqnames, start = hicTRA_ann$start, end = hicTRA_ann$end, name = hicTRA_ann$name, score = 0, strand = '.')
+hicTRB_bed_data <- data.frame(chromosome = hicTRB_ann$seqnames, start = hicTRB_ann$start, end = hicTRB_ann$end, name = hicTRB_ann$name, score = 0, strand = '.')
+
+
+### DO ATAC ###
+
+ATAC_DO <- read.table("/rds/general/user/kmt23/ephemeral/data/concat/mcf7_atac_nfr.bed")
+
+ATAC_DO <- ATAC_DO %>%
+  dplyr::rename(chromosome = V1, start = V2, end = V3, score = V5, strand = V6) %>%
+  mutate(name = paste0("KTdO", 1:nrow(ATAC_DO))) %>%
+  dplyr::select(chromosome, start, end, name, score, strand)
+
+ATAC_DO_gr <- toGRanges(ATAC_DO, format = 'BED')
+
+
+
+hicTRA <- toGRanges(hicTRA_bed_data, format = 'BED')
+hicTRB <- toGRanges(hicTRB_bed_data, format = 'BED')
+
+hicTRA_anno <- annotatePeakInBatch(myPeakList = hicTRA, AnnotationData = ATAC_DO_gr, output = 'overlapping', multiple = TRUE)
+hicTRB_anno <- annotatePeakInBatch(myPeakList = hicTRB, AnnotationData = ATAC_DO_gr, output = 'overlapping', multiple = TRUE)
+
+hicTRA_ann <- as.data.frame(hicTRA_anno)
+hicTRB_ann <- as.data.frame(hicTRB_anno)
+
+hicTRA_ann <- hicTRA_ann %>%
+  mutate(name = paste0(peak, "|", feature)) %>%
+  dplyr::select(seqnames, start, end, width, strand, score, name)
+hicTRB_ann <- hicTRB_ann %>%
+  mutate(name = paste0(peak, "|", feature)) %>%
+  dplyr::select(seqnames, start, end, width, strand, score, name)
+
+hicTRA_bed_data <- data.frame(chromosome = hicTRA_ann$seqnames, start = hicTRA_ann$start, end = hicTRA_ann$end, name = hicTRA_ann$name, score = 0, strand = '.')
+hicTRB_bed_data <- data.frame(chromosome = hicTRB_ann$seqnames, start = hicTRB_ann$start, end = hicTRB_ann$end, name = hicTRB_ann$name, score = 0, strand = '.')
+
+
+
+
+
+### Treated H3K27Ac ### 
+
+H3K27Ac_tr <- read.table("/rds/general/user/kmt23/ephemeral/data/concat/11_Treated5_H3K27Ac_peaks.bed_tr.bed")
+
+H3K27Ac_tr <- H3K27Ac_tr %>%
+  dplyr::rename(chromosome = V1, start = V2, end = V3) %>%
+  mutate(name = paste0("KTAcTR", 1:nrow(H3K27Ac_tr))) %>%
+  dplyr::select(chromosome, start, end, name)
+
+H3K27Ac_tr_gr <- toGRanges(H3K27Ac_tr, format = 'BED')
+
+
+hicTRA <- toGRanges(hicTRA_bed_data, format = 'BED')
+hicTRB <- toGRanges(hicTRB_bed_data, format = 'BED')
+
+hicTRA_anno <- annotatePeakInBatch(myPeakList = hicTRA, AnnotationData = H3K27Ac_tr_gr, output = 'overlapping', multiple = TRUE)
+hicTRB_anno <- annotatePeakInBatch(myPeakList = hicTRB, AnnotationData = H3K27Ac_tr_gr, output = 'overlapping', multiple = TRUE)
+
+hicTRA_ann <- as.data.frame(hicTRA_anno)
+hicTRB_ann <- as.data.frame(hicTRB_anno)
+
+hicTRA_ann <- hicTRA_ann %>%
+  mutate(name = paste0(peak, "|", feature)) %>%
+  dplyr::select(seqnames, start, end, width, strand, score, name)
+hicTRB_ann <- hicTRB_ann %>%
+  mutate(name = paste0(peak, "|", feature)) %>%
+  dplyr::select(seqnames, start, end, width, strand, score, name)
+
+hicTRA_bed_data <- data.frame(chromosome = hicTRA_ann$seqnames, start = hicTRA_ann$start, end = hicTRA_ann$end, name = hicTRA_ann$name, score = 0, strand = '.')
+hicTRB_bed_data <- data.frame(chromosome = hicTRB_ann$seqnames, start = hicTRB_ann$start, end = hicTRB_ann$end, name = hicTRB_ann$name, score = 0, strand = '.')
+
+
+
+### Treated H3K4Me3 ### 
+
+
+H3K4Me3_tr <- read.table("/rds/general/user/kmt23/ephemeral/data/concat/03_Treated1_H3K4Me3_peaks.bed_tr.bed")
+
+H3K4Me3_tr <- H3K4Me3_tr %>%
+  dplyr::rename(chromosome = V1, start = V2, end = V3) %>%
+  mutate(name = paste0("KTMe3TR", 1:nrow(H3K4Me3_tr))) %>%
+  dplyr::select(chromosome, start, end, name)
+
+H3K4Me3_tr_gr <- toGRanges(H3K4Me3_tr, format = 'BED')
+
+
+
+hicTRA <- toGRanges(hicTRA_bed_data, format = 'BED')
+hicTRB <- toGRanges(hicTRB_bed_data, format = 'BED')
+
+hicTRA_anno <- annotatePeakInBatch(myPeakList = hicTRA, AnnotationData = H3K4Me3_tr_gr, output = 'overlapping', multiple = TRUE)
+hicTRB_anno <- annotatePeakInBatch(myPeakList = hicTRB, AnnotationData = H3K4Me3_tr_gr, output = 'overlapping', multiple = TRUE)
+
+hicTRA_ann <- as.data.frame(hicTRA_anno)
+hicTRB_ann <- as.data.frame(hicTRB_anno)
+
+hicTRA_ann <- hicTRA_ann %>%
+  mutate(name = paste0(peak, "|", feature)) %>%
+  dplyr::select(seqnames, start, end, width, strand, score, name)
+hicTRB_ann <- hicTRB_ann %>%
+  mutate(name = paste0(peak, "|", feature)) %>%
+  dplyr::select(seqnames, start, end, width, strand, score, name)
+
+hicTRA_bed_data <- data.frame(chromosome = hicTRA_ann$seqnames, start = hicTRA_ann$start, end = hicTRA_ann$end, name = hicTRA_ann$name, score = 0, strand = '.')
+hicTRB_bed_data <- data.frame(chromosome = hicTRB_ann$seqnames, start = hicTRB_ann$start, end = hicTRB_ann$end, name = hicTRB_ann$name, score = 0, strand = '.')
+
+
+### Treated ATAC ###
+
+ATAC_tr <- read.table("/rds/general/user/kmt23/ephemeral/data/concat/sorted_1_0A5L_01JKMRC_BrCa-TREATED-1_ATAC_hs_i201_r1.fastq.sam_noM.bam_ASF.bam_MACS_ATACSeq_NFR_Peaks_peaks.bed_tr.bed")
+
+ATAC_tr <- ATAC_tr %>%
+  dplyr::rename(chromosome = V1, start = V2, end = V3) %>%
+  mutate(name = paste0("KTATACTR", 1:nrow(ATAC_tr))) %>%
+  dplyr::select(chromosome, start, end, name)
+
+ATAC_tr_gr <- toGRanges(ATAC_tr, format = 'BED')
+
+
+hicTRA <- toGRanges(hicTRA_bed_data, format = 'BED')
+hicTRB <- toGRanges(hicTRB_bed_data, format = 'BED')
+
+hicTRA_anno <- annotatePeakInBatch(myPeakList = hicTRA, AnnotationData = ATAC_tr_gr, output = 'overlapping', multiple = TRUE)
+hicTRB_anno <- annotatePeakInBatch(myPeakList = hicTRB, AnnotationData = ATAC_tr_gr, output = 'overlapping', multiple = TRUE)
+
+hicTRA_ann <- as.data.frame(hicTRA_anno)
+hicTRB_ann <- as.data.frame(hicTRB_anno)
+
+hicTRA_ann <- hicTRA_ann %>%
+  mutate(name = paste0(peak, "|", feature)) %>%
+  dplyr::select(seqnames, start, end, width, strand, score, name)
+hicTRB_ann <- hicTRB_ann %>%
+  mutate(name = paste0(peak, "|", feature)) %>%
+  dplyr::select(seqnames, start, end, width, strand, score, name)
+
+hicTRA_bed_data <- data.frame(chromosome = hicTRA_ann$seqnames, start = hicTRA_ann$start, end = hicTRA_ann$end, name = hicTRA_ann$name, score = 0, strand = '.')
+hicTRB_bed_data <- data.frame(chromosome = hicTRB_ann$seqnames, start = hicTRB_ann$start, end = hicTRB_ann$end, name = hicTRB_ann$name, score = 0, strand = '.')
+
+
+### Treated H3K4Me1
+
+H3K4Me1_tr <- read.table("/rds/general/user/kmt23/ephemeral/data/concat/07_Treated3_H3K4Me1_peaks.bed_tr.bed")
+H3K4Me1_tr <- H3K4Me1_tr %>% dplyr::rename(chromosome = V1, start = V2, end = V3) %>% mutate(name = paste0("KTMe1TR", 1:nrow(H3K4Me1_tr))) %>% dplyr::select(chromosome, start, end, name)
+
+H3K4Me1_tr_gr <- toGRanges(H3K4Me1_tr, format = 'BED')
+
+
+hicTRA <- toGRanges(hicTRA_bed_data, format = 'BED')
+hicTRB <- toGRanges(hicTRB_bed_data, format = 'BED')
+
+hicTRA_anno <- annotatePeakInBatch(myPeakList = hicTRA, AnnotationData = H3K4Me1_tr_gr, output = 'overlapping', multiple = TRUE)
+hicTRB_anno <- annotatePeakInBatch(myPeakList = hicTRB, AnnotationData = H3K4Me1_tr_gr, output = 'overlapping', multiple = TRUE)
+
+hicTRA_ann <- as.data.frame(hicTRA_anno)
+hicTRB_ann <- as.data.frame(hicTRB_anno)
+
+hicTRA_ann <- hicTRA_ann %>%
+  mutate(name = paste0(peak, "|", feature)) %>%
+  dplyr::select(seqnames, start, end, width, strand, score, name)
+hicTRB_ann <- hicTRB_ann %>%
+  mutate(name = paste0(peak, "|", feature)) %>%
+  dplyr::select(seqnames, start, end, width, strand, score, name)
+
+hicTRA_bed_data <- data.frame(chromosome = hicTRA_ann$seqnames, start = hicTRA_ann$start, end = hicTRA_ann$end, name = hicTRA_ann$name, score = 0, strand = '.')
+hicTRB_bed_data <- data.frame(chromosome = hicTRB_ann$seqnames, start = hicTRB_ann$start, end = hicTRB_ann$end, name = hicTRB_ann$name, score = 0, strand = '.')
+
+hicTRA_separated <- hicTRA_bed_data %>%
+  separate(name, into = c("Int_ID", "DE_genes", "Dif_H3K27Ac", "Dif_H3K4Me3", "Dif_H3K4Me1", "Dif_ATAC", "H3K27AcTR", "H3K4Me3TR", "ATACTR", "H3K4Me1TR"), sep = "[.|]")
+hicTRB_separated <- hicTRB_bed_data %>%
+  separate(name, into = c("Int_ID", "DE_genes", "Dif_H3K27Ac", "Dif_H3K4Me3", "Dif_H3K4Me1", "Dif_ATAC", "H3K27AcTR", "H3K4Me3TR", "ATACTR", "H3K4Me1TR"), sep = "[.|]")
+
+write_csv(hicTRA_separated, "/rds/general/user/kmt23/ephemeral/data/concat/hicompare_20_A_treated.csv")
+
+write_csv(hicTRB_separated, "/rds/general/user/kmt23/ephemeral/data/concat/hicompare_20_B_treated.csv")
+
+```
+
+#### 40 kb
+
+```{r}
+###### HICOMPARE ###########
+
+# Reading in the output 
+difhic <- read_csv("/rds/general/user/kmt23/ephemeral/data/concat/diff_hiccompare40k.csv")
+
+# Renaming is necessary for filtering; we only take significant interactions going forward, where significant is defined by FDR q-value <= 0.05
+
+difhic$id1 <- paste0("KTdInt", 1:nrow(difhic))
+difhic$id2 <- paste0("KTdInt", 1:nrow(difhic))
+
+difhicA <- difhic %>%
+  dplyr::select(chr1, start1, end1, id1)
+difhicB <- difhic %>%
+  dplyr::select(chr2, start2, end2, id2)
+
+
+hicTRA_bed_data <- data.frame(chromosome = 
+                                difhicA$chr1, start = 
+                                difhicA$start1 - 1, end = 
+                                difhicA$end1, name = 
+                                difhicA$id1, score = 0, strand = '.')
+
+write.table(hicTRA_bed_data, "/rds/general/user/kmt23/ephemeral/data/concat/difhicA.bed", quote = FALSE, sep = "\t", row.names = FALSE, col.names = FALSE)
+
+hicTRB_bed_data <- data.frame(chromosome = difhicB$chr2, start = difhicB$start2 - 1, end = difhicB$end2, name = difhicB$id2, score = 0, strand = '.')
+
+write.table(hicTRB_bed_data, "/rds/general/user/kmt23/ephemeral/data/concat/difhicB.bed", quote = FALSE, sep = "\t", row.names = FALSE, col.names = FALSE)
+
+###### BIOMART ###########
+
+
+#ensembl <- useEnsembl(biomart = "genes", dataset = "hsapiens_gene_ensembl")
+
+mcf7_de_genes <- read_csv("/rds/general/user/kmt23/ephemeral/data/concat/mcf7_RNA_results_all_hgnc.csv")
+
+
+mcf7_de_genes <- mcf7_de_genes %>%
+  dplyr::filter(padj <= 0.05) %>%
+  dplyr::select(ensembl_gene_id)
+
+
+ensembl_ids <- mcf7_de_genes$ensembl_gene_id
+
+genes <- getBM(
+  attributes = c('ensembl_gene_id', 'chromosome_name', 'transcription_start_site', 'strand'),
+  filters = 'ensembl_gene_id',
+  values = ensembl_ids,
+  mart = ensembl
+)
+
+genes <- genes %>%
+  distinct(ensembl_gene_id, .keep_all = TRUE) %>%
+  dplyr::mutate(start = transcription_start_site - 2500) %>%
+  dplyr::mutate(end = transcription_start_site + 2500)
+
+bed_data <- data.frame(chromosome = genes$chromosome_name, start = genes$start, end = genes$end, name = genes$ensembl_gene_id, score = 0, strand = ifelse(genes$strand == 1, "+", "-"))
+
+write.table(bed_data, "/rds/general/user/kmt23/ephemeral/data/concat/de_genes.bed", quote = FALSE, sep = "\t", row.names = FALSE, col.names = FALSE)
+
+###### ChIPpeakAnno ###########
+
+### DE Genes ###
+
+hicTRA <- toGRanges(hicTRA_bed_data, format = 'BED')
+hicTRB <- toGRanges(hicTRB_bed_data, format = 'BED')
+
+
+mcf7_de_gr <- toGRanges(bed_data, format = 'BED')
+
+
+hicTRA_anno <- annotatePeakInBatch(myPeakList = hicTRA, AnnotationData = mcf7_de_gr, output = 'overlapping', multiple = TRUE)
+hicTRB_anno <- annotatePeakInBatch(myPeakList = hicTRB, AnnotationData = mcf7_de_gr, output = 'overlapping', multiple = TRUE)
+
+
+hicTRA_ann <- as.data.frame(hicTRA_anno)
+hicTRB_ann <- as.data.frame(hicTRB_anno)
+
+hicTRA_ann <- hicTRA_ann %>%
+  mutate(name = paste0(peak, "|", feature)) %>%
+  dplyr::select(seqnames, start, end, width, strand, score, name)
+hicTRB_ann <- hicTRB_ann %>%
+  mutate(name = paste0(peak, "|", feature)) %>%
+  dplyr::select(seqnames, start, end, width, strand, score, name)
+
+
+hicTRA_bed_data <- data.frame(chromosome = hicTRA_ann$seqnames, start = hicTRA_ann$start, end = hicTRA_ann$end, name = hicTRA_ann$name, score = 0, strand = '.')
+hicTRB_bed_data <- data.frame(chromosome = hicTRB_ann$seqnames, start = hicTRB_ann$start, end = hicTRB_ann$end, name = hicTRB_ann$name, score = 0, strand = '.')
+
+### DM H3K27Ac ###
+
+H3K27Ac_DM <- read.table("/rds/general/user/kmt23/ephemeral/data/concat/H3K27Acdif.bed")
+
+H3K27Ac_DM <- H3K27Ac_DM %>%
+  dplyr::rename(chromosome = V1, start = V2, end = V3, score = V5, strand = V6) %>%
+  mutate(name = paste0("KTdmAc", 1:nrow(H3K27Ac_DM))) %>%
+  dplyr::select(chromosome, start, end, name, score, strand)
+
+H3K27Ac_DM_gr <- toGRanges(H3K27Ac_DM, format = 'BED')
+
+hicTRA <- toGRanges(hicTRA_bed_data, format = 'BED')
+hicTRB <- toGRanges(hicTRB_bed_data, format = 'BED')
+
+
+hicTRA_anno <- annotatePeakInBatch(myPeakList = hicTRA, AnnotationData = H3K27Ac_DM_gr, output = 'overlapping', multiple = TRUE)
+hicTRB_anno <- annotatePeakInBatch(myPeakList = hicTRB, AnnotationData = H3K27Ac_DM_gr, output = 'overlapping', multiple = TRUE)
+
+
+hicTRA_ann <- as.data.frame(hicTRA_anno)
+hicTRB_ann <- as.data.frame(hicTRB_anno)
+
+
+hicTRA_ann <- hicTRA_ann %>%
+  mutate(name = paste0(peak, "|", feature)) %>%
+  dplyr::select(seqnames, start, end, width, strand, score, name)
+hicTRB_ann <- hicTRB_ann %>%
+  mutate(name = paste0(peak, "|", feature)) %>%
+  dplyr::select(seqnames, start, end, width, strand, score, name)
+
+
+hicTRA_bed_data <- data.frame(chromosome = hicTRA_ann$seqnames, start = hicTRA_ann$start, end = hicTRA_ann$end, name = hicTRA_ann$name, score = 0, strand = '.')
+hicTRB_bed_data <- data.frame(chromosome = hicTRB_ann$seqnames, start = hicTRB_ann$start, end = hicTRB_ann$end, name = hicTRB_ann$name, score = 0, strand = '.')
+
+
+### DM H3K4Me3 ###
+
+H3K4Me3_DM <- read.table("/rds/general/user/kmt23/ephemeral/data/concat/H3K4Me3dif.bed")
+
+H3K4Me3_DM <- H3K4Me3_DM %>%
+  dplyr::rename(chromosome = V1, start = V2, end = V3, score = V5, strand = V6) %>%
+  mutate(name = paste0("KTdmMe3", 1:nrow(H3K4Me3_DM))) %>%
+  dplyr::select(chromosome, start, end, name, score, strand)
+
+H3K4Me3_DM_gr <- toGRanges(H3K4Me3_DM, format = 'BED')
+
+
+hicTRA <- toGRanges(hicTRA_bed_data, format = 'BED')
+hicTRB <- toGRanges(hicTRB_bed_data, format = 'BED')
+
+hicTRA_anno <- annotatePeakInBatch(myPeakList = hicTRA, AnnotationData = H3K4Me3_DM_gr, output = 'overlapping', multiple = TRUE)
+hicTRB_anno <- annotatePeakInBatch(myPeakList = hicTRB, AnnotationData = H3K4Me3_DM_gr, output = 'overlapping', multiple = TRUE)
+
+hicTRA_ann <- as.data.frame(hicTRA_anno)
+hicTRB_ann <- as.data.frame(hicTRB_anno)
+
+hicTRA_ann <- hicTRA_ann %>%
+  mutate(name = paste0(peak, "|", feature)) %>%
+  dplyr::select(seqnames, start, end, width, strand, score, name)
+hicTRB_ann <- hicTRB_ann %>%
+  mutate(name = paste0(peak, "|", feature)) %>%
+  dplyr::select(seqnames, start, end, width, strand, score, name)
+
+hicTRA_bed_data <- data.frame(chromosome = hicTRA_ann$seqnames, start = hicTRA_ann$start, end = hicTRA_ann$end, name = hicTRA_ann$name, score = 0, strand = '.')
+hicTRB_bed_data <- data.frame(chromosome = hicTRB_ann$seqnames, start = hicTRB_ann$start, end = hicTRB_ann$end, name = hicTRB_ann$name, score = 0, strand = '.')
+
+
+
+### DM H3K4Me1 ###
+H3K4Me1_DM <- read.table("/rds/general/user/kmt23/ephemeral/data/concat/H3K4Me1dif.bed")
+
+H3K4Me1_DM <- H3K4Me1_DM %>%
+  dplyr::rename(chromosome = V1, start = V2, end = V3, score = V5, strand = V6) %>%
+  mutate(name = paste0("KTdmMe1", 1:nrow(H3K4Me1_DM))) %>%
+  dplyr::select(chromosome, start, end, name, score, strand)
+
+H3K4Me1_DM_gr <- toGRanges(H3K4Me1_DM, format = 'BED')
+
+
+hicTRA <- toGRanges(hicTRA_bed_data, format = 'BED')
+hicTRB <- toGRanges(hicTRB_bed_data, format = 'BED')
+
+hicTRA_anno <- annotatePeakInBatch(myPeakList = hicTRA, AnnotationData = H3K4Me1_DM_gr, output = 'overlapping', multiple = TRUE)
+hicTRB_anno <- annotatePeakInBatch(myPeakList = hicTRB, AnnotationData = H3K4Me1_DM_gr, output = 'overlapping', multiple = TRUE)
+
+hicTRA_ann <- as.data.frame(hicTRA_anno)
+hicTRB_ann <- as.data.frame(hicTRB_anno)
+
+hicTRA_ann <- hicTRA_ann %>%
+  mutate(name = paste0(peak, "|", feature)) %>%
+  dplyr::select(seqnames, start, end, width, strand, score, name)
+hicTRB_ann <- hicTRB_ann %>%
+  mutate(name = paste0(peak, "|", feature)) %>%
+  dplyr::select(seqnames, start, end, width, strand, score, name)
+
+hicTRA_bed_data <- data.frame(chromosome = hicTRA_ann$seqnames, start = hicTRA_ann$start, end = hicTRA_ann$end, name = hicTRA_ann$name, score = 0, strand = '.')
+hicTRB_bed_data <- data.frame(chromosome = hicTRB_ann$seqnames, start = hicTRB_ann$start, end = hicTRB_ann$end, name = hicTRB_ann$name, score = 0, strand = '.')
+
+
+### DO ATAC ###
+
+ATAC_DO <- read.table("/rds/general/user/kmt23/ephemeral/data/concat/mcf7_atac_nfr.bed")
+
+ATAC_DO <- ATAC_DO %>%
+  dplyr::rename(chromosome = V1, start = V2, end = V3, score = V5, strand = V6) %>%
+  mutate(name = paste0("KTdO", 1:nrow(ATAC_DO))) %>%
+  dplyr::select(chromosome, start, end, name, score, strand)
+
+ATAC_DO_gr <- toGRanges(ATAC_DO, format = 'BED')
+
+
+
+hicTRA <- toGRanges(hicTRA_bed_data, format = 'BED')
+hicTRB <- toGRanges(hicTRB_bed_data, format = 'BED')
+
+hicTRA_anno <- annotatePeakInBatch(myPeakList = hicTRA, AnnotationData = ATAC_DO_gr, output = 'overlapping', multiple = TRUE)
+hicTRB_anno <- annotatePeakInBatch(myPeakList = hicTRB, AnnotationData = ATAC_DO_gr, output = 'overlapping', multiple = TRUE)
+
+hicTRA_ann <- as.data.frame(hicTRA_anno)
+hicTRB_ann <- as.data.frame(hicTRB_anno)
+
+hicTRA_ann <- hicTRA_ann %>%
+  mutate(name = paste0(peak, "|", feature)) %>%
+  dplyr::select(seqnames, start, end, width, strand, score, name)
+hicTRB_ann <- hicTRB_ann %>%
+  mutate(name = paste0(peak, "|", feature)) %>%
+  dplyr::select(seqnames, start, end, width, strand, score, name)
+
+hicTRA_bed_data <- data.frame(chromosome = hicTRA_ann$seqnames, start = hicTRA_ann$start, end = hicTRA_ann$end, name = hicTRA_ann$name, score = 0, strand = '.')
+hicTRB_bed_data <- data.frame(chromosome = hicTRB_ann$seqnames, start = hicTRB_ann$start, end = hicTRB_ann$end, name = hicTRB_ann$name, score = 0, strand = '.')
+
+
+
+
+
+### Treated H3K27Ac ### 
+
+H3K27Ac_tr <- read.table("/rds/general/user/kmt23/ephemeral/data/concat/11_Treated5_H3K27Ac_peaks.bed_tr.bed")
+
+H3K27Ac_tr <- H3K27Ac_tr %>%
+  dplyr::rename(chromosome = V1, start = V2, end = V3) %>%
+  mutate(name = paste0("KTAcTR", 1:nrow(H3K27Ac_tr))) %>%
+  dplyr::select(chromosome, start, end, name)
+
+H3K27Ac_tr_gr <- toGRanges(H3K27Ac_tr, format = 'BED')
+
+
+hicTRA <- toGRanges(hicTRA_bed_data, format = 'BED')
+hicTRB <- toGRanges(hicTRB_bed_data, format = 'BED')
+
+hicTRA_anno <- annotatePeakInBatch(myPeakList = hicTRA, AnnotationData = H3K27Ac_tr_gr, output = 'overlapping', multiple = TRUE)
+hicTRB_anno <- annotatePeakInBatch(myPeakList = hicTRB, AnnotationData = H3K27Ac_tr_gr, output = 'overlapping', multiple = TRUE)
+
+hicTRA_ann <- as.data.frame(hicTRA_anno)
+hicTRB_ann <- as.data.frame(hicTRB_anno)
+
+hicTRA_ann <- hicTRA_ann %>%
+  mutate(name = paste0(peak, "|", feature)) %>%
+  dplyr::select(seqnames, start, end, width, strand, score, name)
+hicTRB_ann <- hicTRB_ann %>%
+  mutate(name = paste0(peak, "|", feature)) %>%
+  dplyr::select(seqnames, start, end, width, strand, score, name)
+
+hicTRA_bed_data <- data.frame(chromosome = hicTRA_ann$seqnames, start = hicTRA_ann$start, end = hicTRA_ann$end, name = hicTRA_ann$name, score = 0, strand = '.')
+hicTRB_bed_data <- data.frame(chromosome = hicTRB_ann$seqnames, start = hicTRB_ann$start, end = hicTRB_ann$end, name = hicTRB_ann$name, score = 0, strand = '.')
+
+
+
+### Treated H3K4Me3 ### 
+
+
+H3K4Me3_tr <- read.table("/rds/general/user/kmt23/ephemeral/data/concat/03_Treated1_H3K4Me3_peaks.bed_tr.bed")
+
+H3K4Me3_tr <- H3K4Me3_tr %>%
+  dplyr::rename(chromosome = V1, start = V2, end = V3) %>%
+  mutate(name = paste0("KTMe3TR", 1:nrow(H3K4Me3_tr))) %>%
+  dplyr::select(chromosome, start, end, name)
+
+H3K4Me3_tr_gr <- toGRanges(H3K4Me3_tr, format = 'BED')
+
+
+
+hicTRA <- toGRanges(hicTRA_bed_data, format = 'BED')
+hicTRB <- toGRanges(hicTRB_bed_data, format = 'BED')
+
+hicTRA_anno <- annotatePeakInBatch(myPeakList = hicTRA, AnnotationData = H3K4Me3_tr_gr, output = 'overlapping', multiple = TRUE)
+hicTRB_anno <- annotatePeakInBatch(myPeakList = hicTRB, AnnotationData = H3K4Me3_tr_gr, output = 'overlapping', multiple = TRUE)
+
+hicTRA_ann <- as.data.frame(hicTRA_anno)
+hicTRB_ann <- as.data.frame(hicTRB_anno)
+
+hicTRA_ann <- hicTRA_ann %>%
+  mutate(name = paste0(peak, "|", feature)) %>%
+  dplyr::select(seqnames, start, end, width, strand, score, name)
+hicTRB_ann <- hicTRB_ann %>%
+  mutate(name = paste0(peak, "|", feature)) %>%
+  dplyr::select(seqnames, start, end, width, strand, score, name)
+
+hicTRA_bed_data <- data.frame(chromosome = hicTRA_ann$seqnames, start = hicTRA_ann$start, end = hicTRA_ann$end, name = hicTRA_ann$name, score = 0, strand = '.')
+hicTRB_bed_data <- data.frame(chromosome = hicTRB_ann$seqnames, start = hicTRB_ann$start, end = hicTRB_ann$end, name = hicTRB_ann$name, score = 0, strand = '.')
+
+
+### Treated ATAC ###
+
+ATAC_tr <- read.table("/rds/general/user/kmt23/ephemeral/data/concat/sorted_1_0A5L_01JKMRC_BrCa-TREATED-1_ATAC_hs_i201_r1.fastq.sam_noM.bam_ASF.bam_MACS_ATACSeq_NFR_Peaks_peaks.bed_tr.bed")
+
+ATAC_tr <- ATAC_tr %>%
+  dplyr::rename(chromosome = V1, start = V2, end = V3) %>%
+  mutate(name = paste0("KTATACTR", 1:nrow(ATAC_tr))) %>%
+  dplyr::select(chromosome, start, end, name)
+
+ATAC_tr_gr <- toGRanges(ATAC_tr, format = 'BED')
+
+
+hicTRA <- toGRanges(hicTRA_bed_data, format = 'BED')
+hicTRB <- toGRanges(hicTRB_bed_data, format = 'BED')
+
+hicTRA_anno <- annotatePeakInBatch(myPeakList = hicTRA, AnnotationData = ATAC_tr_gr, output = 'overlapping', multiple = TRUE)
+hicTRB_anno <- annotatePeakInBatch(myPeakList = hicTRB, AnnotationData = ATAC_tr_gr, output = 'overlapping', multiple = TRUE)
+
+hicTRA_ann <- as.data.frame(hicTRA_anno)
+hicTRB_ann <- as.data.frame(hicTRB_anno)
+
+hicTRA_ann <- hicTRA_ann %>%
+  mutate(name = paste0(peak, "|", feature)) %>%
+  dplyr::select(seqnames, start, end, width, strand, score, name)
+hicTRB_ann <- hicTRB_ann %>%
+  mutate(name = paste0(peak, "|", feature)) %>%
+  dplyr::select(seqnames, start, end, width, strand, score, name)
+
+hicTRA_bed_data <- data.frame(chromosome = hicTRA_ann$seqnames, start = hicTRA_ann$start, end = hicTRA_ann$end, name = hicTRA_ann$name, score = 0, strand = '.')
+hicTRB_bed_data <- data.frame(chromosome = hicTRB_ann$seqnames, start = hicTRB_ann$start, end = hicTRB_ann$end, name = hicTRB_ann$name, score = 0, strand = '.')
+
+
+### Treated H3K4Me1
+
+H3K4Me1_tr <- read.table("/rds/general/user/kmt23/ephemeral/data/concat/07_Treated3_H3K4Me1_peaks.bed_tr.bed")
+H3K4Me1_tr <- H3K4Me1_tr %>% dplyr::rename(chromosome = V1, start = V2, end = V3) %>% mutate(name = paste0("KTMe1TR", 1:nrow(H3K4Me1_tr))) %>% dplyr::select(chromosome, start, end, name)
+
+H3K4Me1_tr_gr <- toGRanges(H3K4Me1_tr, format = 'BED')
+
+
+hicTRA <- toGRanges(hicTRA_bed_data, format = 'BED')
+hicTRB <- toGRanges(hicTRB_bed_data, format = 'BED')
+
+hicTRA_anno <- annotatePeakInBatch(myPeakList = hicTRA, AnnotationData = H3K4Me1_tr_gr, output = 'overlapping', multiple = TRUE)
+hicTRB_anno <- annotatePeakInBatch(myPeakList = hicTRB, AnnotationData = H3K4Me1_tr_gr, output = 'overlapping', multiple = TRUE)
+
+hicTRA_ann <- as.data.frame(hicTRA_anno)
+hicTRB_ann <- as.data.frame(hicTRB_anno)
+
+hicTRA_ann <- hicTRA_ann %>%
+  mutate(name = paste0(peak, "|", feature)) %>%
+  dplyr::select(seqnames, start, end, width, strand, score, name)
+hicTRB_ann <- hicTRB_ann %>%
+  mutate(name = paste0(peak, "|", feature)) %>%
+  dplyr::select(seqnames, start, end, width, strand, score, name)
+
+hicTRA_bed_data <- data.frame(chromosome = hicTRA_ann$seqnames, start = hicTRA_ann$start, end = hicTRA_ann$end, name = hicTRA_ann$name, score = 0, strand = '.')
+hicTRB_bed_data <- data.frame(chromosome = hicTRB_ann$seqnames, start = hicTRB_ann$start, end = hicTRB_ann$end, name = hicTRB_ann$name, score = 0, strand = '.')
+
+hicTRA_separated <- hicTRA_bed_data %>%
+  separate(name, into = c("Int_ID", "DE_genes", "Dif_H3K27Ac", "Dif_H3K4Me3", "Dif_H3K4Me1", "Dif_ATAC", "H3K27AcTR", "H3K4Me3TR", "ATACTR", "H3K4Me1TR"), sep = "[.|]")
+hicTRB_separated <- hicTRB_bed_data %>%
+  separate(name, into = c("Int_ID", "DE_genes", "Dif_H3K27Ac", "Dif_H3K4Me3", "Dif_H3K4Me1", "Dif_ATAC", "H3K27AcTR", "H3K4Me3TR", "ATACTR", "H3K4Me1TR"), sep = "[.|]")
+
+write_csv(hicTRA_separated, "/rds/general/user/kmt23/ephemeral/data/concat/hicompare_40_A_treated.csv")
+
+write_csv(hicTRB_separated, "/rds/general/user/kmt23/ephemeral/data/concat/hicompare_40_B_treated.csv")
+
+```
+
+## ABC
+
+### Differential peaks
+
+```{r}
+# Reading in the output 
+difhic <- read.delim("/rds/general/ephemeral/user/kmt23/ephemeral/data/concat/EnhancerPredictions.bedpe", header = FALSE, sep = "\t")
+
+
+# Renaming is necessary for filtering; we only take significant interactions going forward, where significant is defined by FDR q-value <= 0.05
+
+difhic$id1 <- paste0("KTabcInt", 1:nrow(difhic))
+difhic$id2 <- paste0("KTabcInt", 1:nrow(difhic))
+
+difhicA <- difhic %>%
+  dplyr::filter(V8 <= 0.05) %>%
+  dplyr::select(V1, V2, V3, id1)
+difhicB <- difhic %>%
+  dplyr::filter(V8 <= 0.05) %>%
+  dplyr::select(V4, V5, V6, id2)
+
+
+hicTRA_bed_data <- data.frame(chromosome = 
+                                difhicA$V1, start = 
+                                difhicA$V2 - 1, end = 
+                                difhicA$V3, name = 
+                                difhicA$id1, score = 0, strand = '.')
+
+write.table(hicTRA_bed_data, "/rds/general/user/kmt23/ephemeral/data/concat/difhicA.bed", quote = FALSE, sep = "\t", row.names = FALSE, col.names = FALSE)
+
+hicTRB_bed_data <- data.frame(chromosome = difhicB$V4, start = difhicB$V5 - 2500, end = difhicB$V6 + 2500, name = difhicB$id2, score = 0, strand = '.')
+
+write.table(hicTRB_bed_data, "/rds/general/user/kmt23/ephemeral/data/concat/difhicB.bed", quote = FALSE, sep = "\t", row.names = FALSE, col.names = FALSE)
+
+###### BIOMART ###########
+
+
+ensembl <- useEnsembl(biomart = "genes", dataset = "hsapiens_gene_ensembl")
+
+mcf7_de_genes <- read_csv("/rds/general/user/kmt23/ephemeral/data/concat/mcf7_RNA_results_all_hgnc.csv")
+
+
+mcf7_de_genes <- mcf7_de_genes %>%
+  dplyr::filter(padj <= 0.05) %>%
+  dplyr::select(ensembl_gene_id)
+
+
+ensembl_ids <- mcf7_de_genes$ensembl_gene_id
+
+genes <- getBM(
+  attributes = c('ensembl_gene_id', 'chromosome_name', 'transcription_start_site', 'strand'),
+  filters = 'ensembl_gene_id',
+  values = ensembl_ids,
+  mart = ensembl
+)
+
+genes <- genes %>%
+  distinct(ensembl_gene_id, .keep_all = TRUE) %>%
+  dplyr::mutate(start = transcription_start_site - 2500) %>%
+  dplyr::mutate(end = transcription_start_site + 2500)
+
+bed_data <- data.frame(chromosome = genes$chromosome_name, start = genes$start, end = genes$end, name = genes$ensembl_gene_id, score = 0, strand = ifelse(genes$strand == 1, "+", "-"))
+
+write.table(bed_data, "/rds/general/user/kmt23/ephemeral/data/concat/de_genes.bed", quote = FALSE, sep = "\t", row.names = FALSE, col.names = FALSE)
+
+###### ChIPpeakAnno ###########
+
+### DE Genes ###
+
+hicTRA <- toGRanges(hicTRA_bed_data, format = 'BED')
+hicTRB <- toGRanges(hicTRB_bed_data, format = 'BED')
+
+
+mcf7_de_gr <- toGRanges(bed_data, format = 'BED')
+
+
+hicTRA_anno <- annotatePeakInBatch(myPeakList = hicTRA, AnnotationData = mcf7_de_gr, output = 'overlapping', multiple = TRUE)
+hicTRB_anno <- annotatePeakInBatch(myPeakList = hicTRB, AnnotationData = mcf7_de_gr, output = 'overlapping', multiple = TRUE)
+
+
+hicTRA_ann <- as.data.frame(hicTRA_anno)
+hicTRB_ann <- as.data.frame(hicTRB_anno)
+
+hicTRA_ann <- hicTRA_ann %>%
+  mutate(name = paste0(peak, "|", feature)) %>%
+  dplyr::select(seqnames, start, end, width, strand, score, name)
+hicTRB_ann <- hicTRB_ann %>%
+  mutate(name = paste0(peak, "|", feature)) %>%
+  dplyr::select(seqnames, start, end, width, strand, score, name)
+
+
+hicTRA_bed_data <- data.frame(chromosome = hicTRA_ann$seqnames, start = hicTRA_ann$start, end = hicTRA_ann$end, name = hicTRA_ann$name, score = 0, strand = '.')
+hicTRB_bed_data <- data.frame(chromosome = hicTRB_ann$seqnames, start = hicTRB_ann$start, end = hicTRB_ann$end, name = hicTRB_ann$name, score = 0, strand = '.')
+
+### DM H3K27Ac ###
+
+H3K27Ac_DM <- read.table("/rds/general/user/kmt23/ephemeral/data/concat/H3K27Acdif.bed")
+
+H3K27Ac_DM <- H3K27Ac_DM %>%
+  dplyr::rename(chromosome = V1, start = V2, end = V3, score = V5, strand = V6) %>%
+  mutate(name = paste0("KTdmAc", 1:nrow(H3K27Ac_DM))) %>%
+  dplyr::select(chromosome, start, end, name, score, strand)
+
+H3K27Ac_DM_gr <- toGRanges(H3K27Ac_DM, format = 'BED')
+
+hicTRA <- toGRanges(hicTRA_bed_data, format = 'BED')
+hicTRB <- toGRanges(hicTRB_bed_data, format = 'BED')
+
+
+hicTRA_anno <- annotatePeakInBatch(myPeakList = hicTRA, AnnotationData = H3K27Ac_DM_gr, output = 'overlapping', multiple = TRUE)
+hicTRB_anno <- annotatePeakInBatch(myPeakList = hicTRB, AnnotationData = H3K27Ac_DM_gr, output = 'overlapping', multiple = TRUE)
+
+
+hicTRA_ann <- as.data.frame(hicTRA_anno)
+hicTRB_ann <- as.data.frame(hicTRB_anno)
+
+
+hicTRA_ann <- hicTRA_ann %>%
+  mutate(name = paste0(peak, "|", feature)) %>%
+  dplyr::select(seqnames, start, end, width, strand, score, name)
+hicTRB_ann <- hicTRB_ann %>%
+  mutate(name = paste0(peak, "|", feature)) %>%
+  dplyr::select(seqnames, start, end, width, strand, score, name)
+
+
+hicTRA_bed_data <- data.frame(chromosome = hicTRA_ann$seqnames, start = hicTRA_ann$start, end = hicTRA_ann$end, name = hicTRA_ann$name, score = 0, strand = '.')
+hicTRB_bed_data <- data.frame(chromosome = hicTRB_ann$seqnames, start = hicTRB_ann$start, end = hicTRB_ann$end, name = hicTRB_ann$name, score = 0, strand = '.')
+
+
+### DM H3K4Me3 ###
+
+H3K4Me3_DM <- read.table("/rds/general/user/kmt23/ephemeral/data/concat/H3K4Me3dif.bed")
+
+H3K4Me3_DM <- H3K4Me3_DM %>%
+  dplyr::rename(chromosome = V1, start = V2, end = V3, score = V5, strand = V6) %>%
+  mutate(name = paste0("KTdmMe3", 1:nrow(H3K4Me3_DM))) %>%
+  dplyr::select(chromosome, start, end, name, score, strand)
+
+H3K4Me3_DM_gr <- toGRanges(H3K4Me3_DM, format = 'BED')
+
+
+hicTRA <- toGRanges(hicTRA_bed_data, format = 'BED')
+hicTRB <- toGRanges(hicTRB_bed_data, format = 'BED')
+
+hicTRA_anno <- annotatePeakInBatch(myPeakList = hicTRA, AnnotationData = H3K4Me3_DM_gr, output = 'overlapping', multiple = TRUE)
+hicTRB_anno <- annotatePeakInBatch(myPeakList = hicTRB, AnnotationData = H3K4Me3_DM_gr, output = 'overlapping', multiple = TRUE)
+
+hicTRA_ann <- as.data.frame(hicTRA_anno)
+hicTRB_ann <- as.data.frame(hicTRB_anno)
+
+hicTRA_ann <- hicTRA_ann %>%
+  mutate(name = paste0(peak, "|", feature)) %>%
+  dplyr::select(seqnames, start, end, width, strand, score, name)
+hicTRB_ann <- hicTRB_ann %>%
+  mutate(name = paste0(peak, "|", feature)) %>%
+  dplyr::select(seqnames, start, end, width, strand, score, name)
+
+hicTRA_bed_data <- data.frame(chromosome = hicTRA_ann$seqnames, start = hicTRA_ann$start, end = hicTRA_ann$end, name = hicTRA_ann$name, score = 0, strand = '.')
+hicTRB_bed_data <- data.frame(chromosome = hicTRB_ann$seqnames, start = hicTRB_ann$start, end = hicTRB_ann$end, name = hicTRB_ann$name, score = 0, strand = '.')
+
+
+
+### DM H3K4Me1 ###
+H3K4Me1_DM <- read.table("/rds/general/user/kmt23/ephemeral/data/concat/H3K4Me1dif.bed")
+
+H3K4Me1_DM <- H3K4Me1_DM %>%
+  dplyr::rename(chromosome = V1, start = V2, end = V3, score = V5, strand = V6) %>%
+  mutate(name = paste0("KTdmMe1", 1:nrow(H3K4Me1_DM))) %>%
+  dplyr::select(chromosome, start, end, name, score, strand)
+
+H3K4Me1_DM_gr <- toGRanges(H3K4Me1_DM, format = 'BED')
+
+
+hicTRA <- toGRanges(hicTRA_bed_data, format = 'BED')
+hicTRB <- toGRanges(hicTRB_bed_data, format = 'BED')
+
+hicTRA_anno <- annotatePeakInBatch(myPeakList = hicTRA, AnnotationData = H3K4Me1_DM_gr, output = 'overlapping', multiple = TRUE)
+hicTRB_anno <- annotatePeakInBatch(myPeakList = hicTRB, AnnotationData = H3K4Me1_DM_gr, output = 'overlapping', multiple = TRUE)
+
+hicTRA_ann <- as.data.frame(hicTRA_anno)
+hicTRB_ann <- as.data.frame(hicTRB_anno)
+
+hicTRA_ann <- hicTRA_ann %>%
+  mutate(name = paste0(peak, "|", feature)) %>%
+  dplyr::select(seqnames, start, end, width, strand, score, name)
+hicTRB_ann <- hicTRB_ann %>%
+  mutate(name = paste0(peak, "|", feature)) %>%
+  dplyr::select(seqnames, start, end, width, strand, score, name)
+
+hicTRA_bed_data <- data.frame(chromosome = hicTRA_ann$seqnames, start = hicTRA_ann$start, end = hicTRA_ann$end, name = hicTRA_ann$name, score = 0, strand = '.')
+hicTRB_bed_data <- data.frame(chromosome = hicTRB_ann$seqnames, start = hicTRB_ann$start, end = hicTRB_ann$end, name = hicTRB_ann$name, score = 0, strand = '.')
+
+
+### DO ATAC ###
+
+ATAC_DO <- read.table("/rds/general/user/kmt23/ephemeral/data/concat/mcf7_atac_nfr.bed")
+
+ATAC_DO <- ATAC_DO %>%
+  dplyr::rename(chromosome = V1, start = V2, end = V3, score = V5, strand = V6) %>%
+  mutate(name = paste0("KTdO", 1:nrow(ATAC_DO))) %>%
+  dplyr::select(chromosome, start, end, name, score, strand)
+
+ATAC_DO_gr <- toGRanges(ATAC_DO, format = 'BED')
+
+
+
+hicTRA <- toGRanges(hicTRA_bed_data, format = 'BED')
+hicTRB <- toGRanges(hicTRB_bed_data, format = 'BED')
+
+hicTRA_anno <- annotatePeakInBatch(myPeakList = hicTRA, AnnotationData = ATAC_DO_gr, output = 'overlapping', multiple = TRUE)
+hicTRB_anno <- annotatePeakInBatch(myPeakList = hicTRB, AnnotationData = ATAC_DO_gr, output = 'overlapping', multiple = TRUE)
+
+hicTRA_ann <- as.data.frame(hicTRA_anno)
+hicTRB_ann <- as.data.frame(hicTRB_anno)
+
+hicTRA_ann <- hicTRA_ann %>%
+  mutate(name = paste0(peak, "|", feature)) %>%
+  dplyr::select(seqnames, start, end, width, strand, score, name)
+hicTRB_ann <- hicTRB_ann %>%
+  mutate(name = paste0(peak, "|", feature)) %>%
+  dplyr::select(seqnames, start, end, width, strand, score, name)
+
+hicTRA_bed_data <- data.frame(chromosome = hicTRA_ann$seqnames, start = hicTRA_ann$start, end = hicTRA_ann$end, name = hicTRA_ann$name, score = 0, strand = '.')
+hicTRB_bed_data <- data.frame(chromosome = hicTRB_ann$seqnames, start = hicTRB_ann$start, end = hicTRB_ann$end, name = hicTRB_ann$name, score = 0, strand = '.')
+
+
+### All H3K27Ac ### 
+
+H3K27Ac <- read.table("/rds/general/user/kmt23/ephemeral/data/concat/09_Control5_H3K27Ac_peaks.bed_fin.bed")
+
+H3K27Ac <- H3K27Ac %>%
+  dplyr::rename(chromosome = V1, start = V2, end = V3) %>%
+  mutate(name = paste0("KTAc", 1:nrow(H3K27Ac))) %>%
+  dplyr::select(chromosome, start, end, name)
+
+H3K27Ac_gr <- toGRanges(H3K27Ac, format = 'BED')
+
+
+
+hicTRA <- toGRanges(hicTRA_bed_data, format = 'BED')
+hicTRB <- toGRanges(hicTRB_bed_data, format = 'BED')
+
+hicTRA_anno <- annotatePeakInBatch(myPeakList = hicTRA, AnnotationData = H3K27Ac_gr, output = 'overlapping', multiple = TRUE)
+hicTRB_anno <- annotatePeakInBatch(myPeakList = hicTRB, AnnotationData = H3K27Ac_gr, output = 'overlapping', multiple = TRUE)
+
+hicTRA_ann <- as.data.frame(hicTRA_anno)
+hicTRB_ann <- as.data.frame(hicTRB_anno)
+
+hicTRA_ann <- hicTRA_ann %>%
+  mutate(name = paste0(peak, "|", feature)) %>%
+  dplyr::select(seqnames, start, end, width, strand, score, name)
+hicTRB_ann <- hicTRB_ann %>%
+  mutate(name = paste0(peak, "|", feature)) %>%
+  dplyr::select(seqnames, start, end, width, strand, score, name)
+
+hicTRA_bed_data <- data.frame(chromosome = hicTRA_ann$seqnames, start = hicTRA_ann$start, end = hicTRA_ann$end, name = hicTRA_ann$name, score = 0, strand = '.')
+hicTRB_bed_data <- data.frame(chromosome = hicTRB_ann$seqnames, start = hicTRB_ann$start, end = hicTRB_ann$end, name = hicTRB_ann$name, score = 0, strand = '.')
+
+
+
+### All H3K4Me1 ###
+
+H3K4Me3 <- read.table("/rds/general/user/kmt23/ephemeral/data/concat/01_Control1_H3K4Me3_peaks.bed_fin.bed")
+
+H3K4Me3 <- H3K4Me3 %>%
+  dplyr::rename(chromosome = V1, start = V2, end = V3) %>%
+  mutate(name = paste0("KTMe3", 1:nrow(H3K4Me3))) %>%
+  dplyr::select(chromosome, start, end, name)
+
+H3K4Me3_gr <- toGRanges(H3K4Me3, format = 'BED')
+
+
+
+hicTRA <- toGRanges(hicTRA_bed_data, format = 'BED')
+hicTRB <- toGRanges(hicTRB_bed_data, format = 'BED')
+
+hicTRA_anno <- annotatePeakInBatch(myPeakList = hicTRA, AnnotationData = H3K4Me3_gr, output = 'overlapping', multiple = TRUE)
+hicTRB_anno <- annotatePeakInBatch(myPeakList = hicTRB, AnnotationData = H3K4Me3_gr, output = 'overlapping', multiple = TRUE)
+
+hicTRA_ann <- as.data.frame(hicTRA_anno)
+hicTRB_ann <- as.data.frame(hicTRB_anno)
+
+hicTRA_ann <- hicTRA_ann %>%
+  mutate(name = paste0(peak, "|", feature)) %>%
+  dplyr::select(seqnames, start, end, width, strand, score, name)
+hicTRB_ann <- hicTRB_ann %>%
+  mutate(name = paste0(peak, "|", feature)) %>%
+  dplyr::select(seqnames, start, end, width, strand, score, name)
+
+hicTRA_bed_data <- data.frame(chromosome = hicTRA_ann$seqnames, start = hicTRA_ann$start, end = hicTRA_ann$end, name = hicTRA_ann$name, score = 0, strand = '.')
+hicTRB_bed_data <- data.frame(chromosome = hicTRB_ann$seqnames, start = hicTRB_ann$start, end = hicTRB_ann$end, name = hicTRB_ann$name, score = 0, strand = '.')
+
+
+### All ATAC ###
+
+ATAC <- read.table("/rds/general/user/kmt23/ephemeral/data/concat/sorted_1_0A5L_01JKMRC_BrCa-TREATED-1_ATAC_hs_i201_r1.fastq.sam_noM.bam_ASF.bam_MACS_ATACSeq_NFR_Peaks_peaks.bed_j.bed")
+
+ATAC <- ATAC %>%
+  dplyr::rename(chromosome = V1, start = V2, end = V3) %>%
+  mutate(name = paste0("KTATAC", 1:nrow(ATAC))) %>%
+  dplyr::select(chromosome, start, end, name)
+
+ATAC_gr <- toGRanges(ATAC, format = 'BED')
+
+
+hicTRA <- toGRanges(hicTRA_bed_data, format = 'BED')
+hicTRB <- toGRanges(hicTRB_bed_data, format = 'BED')
+
+hicTRA_anno <- annotatePeakInBatch(myPeakList = hicTRA, AnnotationData = ATAC_gr, output = 'overlapping', multiple = TRUE)
+hicTRB_anno <- annotatePeakInBatch(myPeakList = hicTRB, AnnotationData = ATAC_gr, output = 'overlapping', multiple = TRUE)
+
+hicTRA_ann <- as.data.frame(hicTRA_anno)
+hicTRB_ann <- as.data.frame(hicTRB_anno)
+
+hicTRA_ann <- hicTRA_ann %>%
+  mutate(name = paste0(peak, "|", feature)) %>%
+  dplyr::select(seqnames, start, end, width, strand, score, name)
+hicTRB_ann <- hicTRB_ann %>%
+  mutate(name = paste0(peak, "|", feature)) %>%
+  dplyr::select(seqnames, start, end, width, strand, score, name)
+
+hicTRA_bed_data <- data.frame(chromosome = hicTRA_ann$seqnames, start = hicTRA_ann$start, end = hicTRA_ann$end, name = hicTRA_ann$name, score = 0, strand = '.')
+hicTRB_bed_data <- data.frame(chromosome = hicTRB_ann$seqnames, start = hicTRB_ann$start, end = hicTRB_ann$end, name = hicTRB_ann$name, score = 0, strand = '.')
+
+
+
+### All H3K4Me1
+
+H3K4Me1 <- read.table("/rds/general/user/kmt23/ephemeral/data/concat/05_Control3_H3K4Me1_peaks.bed_fin.bed")
+H3K4Me1 <- H3K4Me1 %>% dplyr::rename(chromosome = V1, start = V2, end = V3) %>% mutate(name = paste0("KTMe1", 1:nrow(H3K4Me1))) %>% dplyr::select(chromosome, start, end, name)
+
+H3K4Me1_gr <- toGRanges(H3K4Me1, format = 'BED')
+
+
+
+
+hicTRA <- toGRanges(hicTRA_bed_data, format = 'BED')
+hicTRB <- toGRanges(hicTRB_bed_data, format = 'BED')
+
+hicTRA_anno <- annotatePeakInBatch(myPeakList = hicTRA, AnnotationData = H3K4Me1_gr, output = 'overlapping', multiple = TRUE)
+hicTRB_anno <- annotatePeakInBatch(myPeakList = hicTRB, AnnotationData = H3K4Me1_gr, output = 'overlapping', multiple = TRUE)
+
+hicTRA_ann <- as.data.frame(hicTRA_anno)
+hicTRB_ann <- as.data.frame(hicTRB_anno)
+
+hicTRA_ann <- hicTRA_ann %>%
+  mutate(name = paste0(peak, "|", feature)) %>%
+  dplyr::select(seqnames, start, end, width, strand, score, name)
+hicTRB_ann <- hicTRB_ann %>%
+  mutate(name = paste0(peak, "|", feature)) %>%
+  dplyr::select(seqnames, start, end, width, strand, score, name)
+
+hicTRA_bed_data <- data.frame(chromosome = hicTRA_ann$seqnames, start = hicTRA_ann$start, end = hicTRA_ann$end, name = hicTRA_ann$name, score = 0, strand = '.')
+hicTRB_bed_data <- data.frame(chromosome = hicTRB_ann$seqnames, start = hicTRB_ann$start, end = hicTRB_ann$end, name = hicTRB_ann$name, score = 0, strand = '.')
+
+
+
+hicTRA_separated <- hicTRA_bed_data %>%
+  separate(name, into = c("Int_ID", "DE_genes", "Dif_H3K27Ac", "Dif_H3K4Me3", "Dif_H3K4Me1", "Dif_ATAC", "H3K27Ac", "H3K4Me3", "ATAC", "H3K4Me1"), sep = "[.|]")
+hicTRB_separated <- hicTRB_bed_data %>%
+  separate(name, into = c("Int_ID", "DE_genes", "Dif_H3K27Ac", "Dif_H3K4Me3", "Dif_H3K4Me1", "Dif_ATAC", "H3K27Ac", "H3K4Me3", "ATAC", "H3K4Me1"), sep = "[.|]")
+
+write_csv(hicTRA_separated, "/rds/general/user/kmt23/ephemeral/data/concat/ABC_A_all.csv")
+
+write_csv(hicTRB_separated, "/rds/general/user/kmt23/ephemeral/data/concat/ABC_B_all.csv")
+
+print(head(hicTRA_separated))
+
+```
+
+### Peaks shared among treated samples
+
+```{r}
+# Reading in the output 
+difhic <- read.delim("/rds/general/ephemeral/user/kmt23/ephemeral/data/concat/EnhancerPredictions.bedpe", header = FALSE, sep = "\t")
+
+
+# Renaming is necessary for filtering; we only take significant interactions going forward, where significant is defined by FDR q-value <= 0.05
+
+difhic$id1 <- paste0("KTabcInt", 1:nrow(difhic))
+difhic$id2 <- paste0("KTabcInt", 1:nrow(difhic))
+
+difhicA <- difhic %>%
+  dplyr::filter(V8 <= 0.05) %>%
+  dplyr::select(V1, V2, V3, id1)
+difhicB <- difhic %>%
+  dplyr::filter(V8 <= 0.05) %>%
+  dplyr::select(V4, V5, V6, id2)
+
+
+hicTRA_bed_data <- data.frame(chromosome = 
+                                difhicA$V1, start = 
+                                difhicA$V2 - 1, end = 
+                                difhicA$V3, name = 
+                                difhicA$id1, score = 0, strand = '.')
+
+write.table(hicTRA_bed_data, "/rds/general/user/kmt23/ephemeral/data/concat/difhicA.bed", quote = FALSE, sep = "\t", row.names = FALSE, col.names = FALSE)
+
+hicTRB_bed_data <- data.frame(chromosome = difhicB$V4, start = difhicB$V5 - 2500, end = difhicB$V6 + 2500, name = difhicB$id2, score = 0, strand = '.')
+
+write.table(hicTRB_bed_data, "/rds/general/user/kmt23/ephemeral/data/concat/difhicB.bed", quote = FALSE, sep = "\t", row.names = FALSE, col.names = FALSE)
+
+###### BIOMART ###########
+
+
+#ensembl <- useEnsembl(biomart = "genes", dataset = "hsapiens_gene_ensembl")
+
+mcf7_de_genes <- read_csv("/rds/general/user/kmt23/ephemeral/data/concat/mcf7_RNA_results_all_hgnc.csv")
+
+
+mcf7_de_genes <- mcf7_de_genes %>%
+  dplyr::filter(padj <= 0.05) %>%
+  dplyr::select(ensembl_gene_id)
+
+
+ensembl_ids <- mcf7_de_genes$ensembl_gene_id
+
+genes <- getBM(
+  attributes = c('ensembl_gene_id', 'chromosome_name', 'transcription_start_site', 'strand'),
+  filters = 'ensembl_gene_id',
+  values = ensembl_ids,
+  mart = ensembl
+)
+
+genes <- genes %>%
+  distinct(ensembl_gene_id, .keep_all = TRUE) %>%
+  dplyr::mutate(start = transcription_start_site - 2500) %>%
+  dplyr::mutate(end = transcription_start_site + 2500)
+
+bed_data <- data.frame(chromosome = genes$chromosome_name, start = genes$start, end = genes$end, name = genes$ensembl_gene_id, score = 0, strand = ifelse(genes$strand == 1, "+", "-"))
+
+write.table(bed_data, "/rds/general/user/kmt23/ephemeral/data/concat/de_genes.bed", quote = FALSE, sep = "\t", row.names = FALSE, col.names = FALSE)
+
+###### ChIPpeakAnno ###########
+
+### DE Genes ###
+
+hicTRA <- toGRanges(hicTRA_bed_data, format = 'BED')
+hicTRB <- toGRanges(hicTRB_bed_data, format = 'BED')
+
+
+mcf7_de_gr <- toGRanges(bed_data, format = 'BED')
+
+
+hicTRA_anno <- annotatePeakInBatch(myPeakList = hicTRA, AnnotationData = mcf7_de_gr, output = 'overlapping', multiple = TRUE)
+hicTRB_anno <- annotatePeakInBatch(myPeakList = hicTRB, AnnotationData = mcf7_de_gr, output = 'overlapping', multiple = TRUE)
+
+
+hicTRA_ann <- as.data.frame(hicTRA_anno)
+hicTRB_ann <- as.data.frame(hicTRB_anno)
+
+hicTRA_ann <- hicTRA_ann %>%
+  mutate(name = paste0(peak, "|", feature)) %>%
+  dplyr::select(seqnames, start, end, width, strand, score, name)
+hicTRB_ann <- hicTRB_ann %>%
+  mutate(name = paste0(peak, "|", feature)) %>%
+  dplyr::select(seqnames, start, end, width, strand, score, name)
+
+
+hicTRA_bed_data <- data.frame(chromosome = hicTRA_ann$seqnames, start = hicTRA_ann$start, end = hicTRA_ann$end, name = hicTRA_ann$name, score = 0, strand = '.')
+hicTRB_bed_data <- data.frame(chromosome = hicTRB_ann$seqnames, start = hicTRB_ann$start, end = hicTRB_ann$end, name = hicTRB_ann$name, score = 0, strand = '.')
+
+### DM H3K27Ac ###
+
+H3K27Ac_DM <- read.table("/rds/general/user/kmt23/ephemeral/data/concat/H3K27Acdif.bed")
+
+H3K27Ac_DM <- H3K27Ac_DM %>%
+  dplyr::rename(chromosome = V1, start = V2, end = V3, score = V5, strand = V6) %>%
+  mutate(name = paste0("KTdmAc", 1:nrow(H3K27Ac_DM))) %>%
+  dplyr::select(chromosome, start, end, name, score, strand)
+
+H3K27Ac_DM_gr <- toGRanges(H3K27Ac_DM, format = 'BED')
+
+hicTRA <- toGRanges(hicTRA_bed_data, format = 'BED')
+hicTRB <- toGRanges(hicTRB_bed_data, format = 'BED')
+
+
+hicTRA_anno <- annotatePeakInBatch(myPeakList = hicTRA, AnnotationData = H3K27Ac_DM_gr, output = 'overlapping', multiple = TRUE)
+hicTRB_anno <- annotatePeakInBatch(myPeakList = hicTRB, AnnotationData = H3K27Ac_DM_gr, output = 'overlapping', multiple = TRUE)
+
+
+hicTRA_ann <- as.data.frame(hicTRA_anno)
+hicTRB_ann <- as.data.frame(hicTRB_anno)
+
+
+hicTRA_ann <- hicTRA_ann %>%
+  mutate(name = paste0(peak, "|", feature)) %>%
+  dplyr::select(seqnames, start, end, width, strand, score, name)
+hicTRB_ann <- hicTRB_ann %>%
+  mutate(name = paste0(peak, "|", feature)) %>%
+  dplyr::select(seqnames, start, end, width, strand, score, name)
+
+
+hicTRA_bed_data <- data.frame(chromosome = hicTRA_ann$seqnames, start = hicTRA_ann$start, end = hicTRA_ann$end, name = hicTRA_ann$name, score = 0, strand = '.')
+hicTRB_bed_data <- data.frame(chromosome = hicTRB_ann$seqnames, start = hicTRB_ann$start, end = hicTRB_ann$end, name = hicTRB_ann$name, score = 0, strand = '.')
+
+
+### DM H3K4Me3 ###
+
+H3K4Me3_DM <- read.table("/rds/general/user/kmt23/ephemeral/data/concat/H3K4Me3dif.bed")
+
+H3K4Me3_DM <- H3K4Me3_DM %>%
+  dplyr::rename(chromosome = V1, start = V2, end = V3, score = V5, strand = V6) %>%
+  mutate(name = paste0("KTdmMe3", 1:nrow(H3K4Me3_DM))) %>%
+  dplyr::select(chromosome, start, end, name, score, strand)
+
+H3K4Me3_DM_gr <- toGRanges(H3K4Me3_DM, format = 'BED')
+
+
+hicTRA <- toGRanges(hicTRA_bed_data, format = 'BED')
+hicTRB <- toGRanges(hicTRB_bed_data, format = 'BED')
+
+hicTRA_anno <- annotatePeakInBatch(myPeakList = hicTRA, AnnotationData = H3K4Me3_DM_gr, output = 'overlapping', multiple = TRUE)
+hicTRB_anno <- annotatePeakInBatch(myPeakList = hicTRB, AnnotationData = H3K4Me3_DM_gr, output = 'overlapping', multiple = TRUE)
+
+hicTRA_ann <- as.data.frame(hicTRA_anno)
+hicTRB_ann <- as.data.frame(hicTRB_anno)
+
+hicTRA_ann <- hicTRA_ann %>%
+  mutate(name = paste0(peak, "|", feature)) %>%
+  dplyr::select(seqnames, start, end, width, strand, score, name)
+hicTRB_ann <- hicTRB_ann %>%
+  mutate(name = paste0(peak, "|", feature)) %>%
+  dplyr::select(seqnames, start, end, width, strand, score, name)
+
+hicTRA_bed_data <- data.frame(chromosome = hicTRA_ann$seqnames, start = hicTRA_ann$start, end = hicTRA_ann$end, name = hicTRA_ann$name, score = 0, strand = '.')
+hicTRB_bed_data <- data.frame(chromosome = hicTRB_ann$seqnames, start = hicTRB_ann$start, end = hicTRB_ann$end, name = hicTRB_ann$name, score = 0, strand = '.')
+
+
+
+### DM H3K4Me1 ###
+H3K4Me1_DM <- read.table("/rds/general/user/kmt23/ephemeral/data/concat/H3K4Me1dif.bed")
+
+H3K4Me1_DM <- H3K4Me1_DM %>%
+  dplyr::rename(chromosome = V1, start = V2, end = V3, score = V5, strand = V6) %>%
+  mutate(name = paste0("KTdmMe1", 1:nrow(H3K4Me1_DM))) %>%
+  dplyr::select(chromosome, start, end, name, score, strand)
+
+H3K4Me1_DM_gr <- toGRanges(H3K4Me1_DM, format = 'BED')
+
+
+hicTRA <- toGRanges(hicTRA_bed_data, format = 'BED')
+hicTRB <- toGRanges(hicTRB_bed_data, format = 'BED')
+
+hicTRA_anno <- annotatePeakInBatch(myPeakList = hicTRA, AnnotationData = H3K4Me1_DM_gr, output = 'overlapping', multiple = TRUE)
+hicTRB_anno <- annotatePeakInBatch(myPeakList = hicTRB, AnnotationData = H3K4Me1_DM_gr, output = 'overlapping', multiple = TRUE)
+
+hicTRA_ann <- as.data.frame(hicTRA_anno)
+hicTRB_ann <- as.data.frame(hicTRB_anno)
+
+hicTRA_ann <- hicTRA_ann %>%
+  mutate(name = paste0(peak, "|", feature)) %>%
+  dplyr::select(seqnames, start, end, width, strand, score, name)
+hicTRB_ann <- hicTRB_ann %>%
+  mutate(name = paste0(peak, "|", feature)) %>%
+  dplyr::select(seqnames, start, end, width, strand, score, name)
+
+hicTRA_bed_data <- data.frame(chromosome = hicTRA_ann$seqnames, start = hicTRA_ann$start, end = hicTRA_ann$end, name = hicTRA_ann$name, score = 0, strand = '.')
+hicTRB_bed_data <- data.frame(chromosome = hicTRB_ann$seqnames, start = hicTRB_ann$start, end = hicTRB_ann$end, name = hicTRB_ann$name, score = 0, strand = '.')
+
+
+### DO ATAC ###
+
+ATAC_DO <- read.table("/rds/general/user/kmt23/ephemeral/data/concat/mcf7_atac_nfr.bed")
+
+ATAC_DO <- ATAC_DO %>%
+  dplyr::rename(chromosome = V1, start = V2, end = V3, score = V5, strand = V6) %>%
+  mutate(name = paste0("KTdO", 1:nrow(ATAC_DO))) %>%
+  dplyr::select(chromosome, start, end, name, score, strand)
+
+ATAC_DO_gr <- toGRanges(ATAC_DO, format = 'BED')
+
+
+
+hicTRA <- toGRanges(hicTRA_bed_data, format = 'BED')
+hicTRB <- toGRanges(hicTRB_bed_data, format = 'BED')
+
+hicTRA_anno <- annotatePeakInBatch(myPeakList = hicTRA, AnnotationData = ATAC_DO_gr, output = 'overlapping', multiple = TRUE)
+hicTRB_anno <- annotatePeakInBatch(myPeakList = hicTRB, AnnotationData = ATAC_DO_gr, output = 'overlapping', multiple = TRUE)
+
+hicTRA_ann <- as.data.frame(hicTRA_anno)
+hicTRB_ann <- as.data.frame(hicTRB_anno)
+
+hicTRA_ann <- hicTRA_ann %>%
+  mutate(name = paste0(peak, "|", feature)) %>%
+  dplyr::select(seqnames, start, end, width, strand, score, name)
+hicTRB_ann <- hicTRB_ann %>%
+  mutate(name = paste0(peak, "|", feature)) %>%
+  dplyr::select(seqnames, start, end, width, strand, score, name)
+
+hicTRA_bed_data <- data.frame(chromosome = hicTRA_ann$seqnames, start = hicTRA_ann$start, end = hicTRA_ann$end, name = hicTRA_ann$name, score = 0, strand = '.')
+hicTRB_bed_data <- data.frame(chromosome = hicTRB_ann$seqnames, start = hicTRB_ann$start, end = hicTRB_ann$end, name = hicTRB_ann$name, score = 0, strand = '.')
+
+
+
+
+
+### Treated H3K27Ac ### 
+
+H3K27Ac_tr <- read.table("/rds/general/user/kmt23/ephemeral/data/concat/11_Treated5_H3K27Ac_peaks.bed_tr.bed")
+
+H3K27Ac_tr <- H3K27Ac_tr %>%
+  dplyr::rename(chromosome = V1, start = V2, end = V3) %>%
+  mutate(name = paste0("KTAcTR", 1:nrow(H3K27Ac_tr))) %>%
+  dplyr::select(chromosome, start, end, name)
+
+H3K27Ac_tr_gr <- toGRanges(H3K27Ac_tr, format = 'BED')
+
+
+hicTRA <- toGRanges(hicTRA_bed_data, format = 'BED')
+hicTRB <- toGRanges(hicTRB_bed_data, format = 'BED')
+
+hicTRA_anno <- annotatePeakInBatch(myPeakList = hicTRA, AnnotationData = H3K27Ac_tr_gr, output = 'overlapping', multiple = TRUE)
+hicTRB_anno <- annotatePeakInBatch(myPeakList = hicTRB, AnnotationData = H3K27Ac_tr_gr, output = 'overlapping', multiple = TRUE)
+
+hicTRA_ann <- as.data.frame(hicTRA_anno)
+hicTRB_ann <- as.data.frame(hicTRB_anno)
+
+hicTRA_ann <- hicTRA_ann %>%
+  mutate(name = paste0(peak, "|", feature)) %>%
+  dplyr::select(seqnames, start, end, width, strand, score, name)
+hicTRB_ann <- hicTRB_ann %>%
+  mutate(name = paste0(peak, "|", feature)) %>%
+  dplyr::select(seqnames, start, end, width, strand, score, name)
+
+hicTRA_bed_data <- data.frame(chromosome = hicTRA_ann$seqnames, start = hicTRA_ann$start, end = hicTRA_ann$end, name = hicTRA_ann$name, score = 0, strand = '.')
+hicTRB_bed_data <- data.frame(chromosome = hicTRB_ann$seqnames, start = hicTRB_ann$start, end = hicTRB_ann$end, name = hicTRB_ann$name, score = 0, strand = '.')
+
+
+
+### Treated H3K4Me3 ### 
+
+
+H3K4Me3_tr <- read.table("/rds/general/user/kmt23/ephemeral/data/concat/03_Treated1_H3K4Me3_peaks.bed_tr.bed")
+
+H3K4Me3_tr <- H3K4Me3_tr %>%
+  dplyr::rename(chromosome = V1, start = V2, end = V3) %>%
+  mutate(name = paste0("KTMe3TR", 1:nrow(H3K4Me3_tr))) %>%
+  dplyr::select(chromosome, start, end, name)
+
+H3K4Me3_tr_gr <- toGRanges(H3K4Me3_tr, format = 'BED')
+
+
+
+hicTRA <- toGRanges(hicTRA_bed_data, format = 'BED')
+hicTRB <- toGRanges(hicTRB_bed_data, format = 'BED')
+
+hicTRA_anno <- annotatePeakInBatch(myPeakList = hicTRA, AnnotationData = H3K4Me3_tr_gr, output = 'overlapping', multiple = TRUE)
+hicTRB_anno <- annotatePeakInBatch(myPeakList = hicTRB, AnnotationData = H3K4Me3_tr_gr, output = 'overlapping', multiple = TRUE)
+
+hicTRA_ann <- as.data.frame(hicTRA_anno)
+hicTRB_ann <- as.data.frame(hicTRB_anno)
+
+hicTRA_ann <- hicTRA_ann %>%
+  mutate(name = paste0(peak, "|", feature)) %>%
+  dplyr::select(seqnames, start, end, width, strand, score, name)
+hicTRB_ann <- hicTRB_ann %>%
+  mutate(name = paste0(peak, "|", feature)) %>%
+  dplyr::select(seqnames, start, end, width, strand, score, name)
+
+hicTRA_bed_data <- data.frame(chromosome = hicTRA_ann$seqnames, start = hicTRA_ann$start, end = hicTRA_ann$end, name = hicTRA_ann$name, score = 0, strand = '.')
+hicTRB_bed_data <- data.frame(chromosome = hicTRB_ann$seqnames, start = hicTRB_ann$start, end = hicTRB_ann$end, name = hicTRB_ann$name, score = 0, strand = '.')
+
+
+### Treated ATAC ###
+
+ATAC_tr <- read.table("/rds/general/user/kmt23/ephemeral/data/concat/sorted_1_0A5L_01JKMRC_BrCa-TREATED-1_ATAC_hs_i201_r1.fastq.sam_noM.bam_ASF.bam_MACS_ATACSeq_NFR_Peaks_peaks.bed_tr.bed")
+
+ATAC_tr <- ATAC_tr %>%
+  dplyr::rename(chromosome = V1, start = V2, end = V3) %>%
+  mutate(name = paste0("KTATACTR", 1:nrow(ATAC_tr))) %>%
+  dplyr::select(chromosome, start, end, name)
+
+ATAC_tr_gr <- toGRanges(ATAC_tr, format = 'BED')
+
+
+hicTRA <- toGRanges(hicTRA_bed_data, format = 'BED')
+hicTRB <- toGRanges(hicTRB_bed_data, format = 'BED')
+
+hicTRA_anno <- annotatePeakInBatch(myPeakList = hicTRA, AnnotationData = ATAC_tr_gr, output = 'overlapping', multiple = TRUE)
+hicTRB_anno <- annotatePeakInBatch(myPeakList = hicTRB, AnnotationData = ATAC_tr_gr, output = 'overlapping', multiple = TRUE)
+
+hicTRA_ann <- as.data.frame(hicTRA_anno)
+hicTRB_ann <- as.data.frame(hicTRB_anno)
+
+hicTRA_ann <- hicTRA_ann %>%
+  mutate(name = paste0(peak, "|", feature)) %>%
+  dplyr::select(seqnames, start, end, width, strand, score, name)
+hicTRB_ann <- hicTRB_ann %>%
+  mutate(name = paste0(peak, "|", feature)) %>%
+  dplyr::select(seqnames, start, end, width, strand, score, name)
+
+hicTRA_bed_data <- data.frame(chromosome = hicTRA_ann$seqnames, start = hicTRA_ann$start, end = hicTRA_ann$end, name = hicTRA_ann$name, score = 0, strand = '.')
+hicTRB_bed_data <- data.frame(chromosome = hicTRB_ann$seqnames, start = hicTRB_ann$start, end = hicTRB_ann$end, name = hicTRB_ann$name, score = 0, strand = '.')
+
+
+### Treated H3K4Me1
+
+H3K4Me1_tr <- read.table("/rds/general/user/kmt23/ephemeral/data/concat/07_Treated3_H3K4Me1_peaks.bed_tr.bed")
+H3K4Me1_tr <- H3K4Me1_tr %>% dplyr::rename(chromosome = V1, start = V2, end = V3) %>% mutate(name = paste0("KTMe1TR", 1:nrow(H3K4Me1_tr))) %>% dplyr::select(chromosome, start, end, name)
+
+H3K4Me1_tr_gr <- toGRanges(H3K4Me1_tr, format = 'BED')
+
+
+hicTRA <- toGRanges(hicTRA_bed_data, format = 'BED')
+hicTRB <- toGRanges(hicTRB_bed_data, format = 'BED')
+
+hicTRA_anno <- annotatePeakInBatch(myPeakList = hicTRA, AnnotationData = H3K4Me1_tr_gr, output = 'overlapping', multiple = TRUE)
+hicTRB_anno <- annotatePeakInBatch(myPeakList = hicTRB, AnnotationData = H3K4Me1_tr_gr, output = 'overlapping', multiple = TRUE)
+
+hicTRA_ann <- as.data.frame(hicTRA_anno)
+hicTRB_ann <- as.data.frame(hicTRB_anno)
+
+hicTRA_ann <- hicTRA_ann %>%
+  mutate(name = paste0(peak, "|", feature)) %>%
+  dplyr::select(seqnames, start, end, width, strand, score, name)
+hicTRB_ann <- hicTRB_ann %>%
+  mutate(name = paste0(peak, "|", feature)) %>%
+  dplyr::select(seqnames, start, end, width, strand, score, name)
+
+hicTRA_bed_data <- data.frame(chromosome = hicTRA_ann$seqnames, start = hicTRA_ann$start, end = hicTRA_ann$end, name = hicTRA_ann$name, score = 0, strand = '.')
+hicTRB_bed_data <- data.frame(chromosome = hicTRB_ann$seqnames, start = hicTRB_ann$start, end = hicTRB_ann$end, name = hicTRB_ann$name, score = 0, strand = '.')
+
+hicTRA_separated <- hicTRA_bed_data %>%
+  separate(name, into = c("Int_ID", "DE_genes", "Dif_H3K27Ac", "Dif_H3K4Me3", "Dif_H3K4Me1", "Dif_ATAC", "H3K27AcTR", "H3K4Me3TR", "ATACTR", "H3K4Me1TR"), sep = "[.|]")
+hicTRB_separated <- hicTRB_bed_data %>%
+  separate(name, into = c("Int_ID", "DE_genes", "Dif_H3K27Ac", "Dif_H3K4Me3", "Dif_H3K4Me1", "Dif_ATAC", "H3K27AcTR", "H3K4Me3TR", "ATACTR", "H3K4Me1TR"), sep = "[.|]")
+
+write_csv(hicTRA_separated, "/rds/general/user/kmt23/ephemeral/data/concat/ABC_A_treated.csv")
+
+write_csv(hicTRB_separated, "/rds/general/user/kmt23/ephemeral/data/concat/ABC_B_treated.csv")
+
+```
+
+## Concatenation
+
+```{r}
+fithic_tr40_A_treated <- read_csv("/rds/general/user/kmt23/ephemeral/data/concat/fithic_tr40_A_treated.csv")
+fithic_tr40_B_treated <- read_csv("/rds/general/user/kmt23/ephemeral/data/concat/fithic_tr40_B_treated.csv")
+
+fithic_tr20_A_treated <- read_csv("/rds/general/user/kmt23/ephemeral/data/concat/fithic_tr20_A_treated.csv")
+fithic_tr20_B_treated <- read_csv("/rds/general/user/kmt23/ephemeral/data/concat/fithic_tr20_B_treated.csv")
+
+fithic_tr20_B_treated <- read_csv("/rds/general/user/kmt23/ephemeral/data/concat/fithic_tr20_B_treated.csv")
+
+hicompare_20_A_all <- read_csv("/rds/general/user/kmt23/ephemeral/data/concat/hicompare_20_A_all.csv")
+hicompare_20_B_all <- read_csv("/rds/general/user/kmt23/ephemeral/data/concat/hicompare_20_B_all.csv")
+
+hicompare_40_A_treated <- read_csv("/rds/general/user/kmt23/ephemeral/data/concat/hicompare_40_A_treated.csv")
+hicompare_40_B_treated <- read_csv("/rds/general/user/kmt23/ephemeral/data/concat/hicompare_40_B_treated.csv")
+
+hicompare_20_A_treated <- read_csv("/rds/general/user/kmt23/ephemeral/data/concat/hicompare_20_A_treated.csv")
+hicompare_20_B_treated <- read_csv("/rds/general/user/kmt23/ephemeral/data/concat/hicompare_20_B_treated.csv")
+
+# This will give the number of each type of peak rather than the name of each distinct peak
+df_new <- hicompare_20_B_treated %>% # change based on the type of interaction
+  group_by(Int_ID, DE_genes) %>%
+  mutate(
+    D_Dif_H3K27Ac = n_distinct(Dif_H3K27Ac)-1,
+    D_Dif_H3K4Me3 = n_distinct(Dif_H3K4Me3)-1,
+    D_Dif_H3K4Me1 = n_distinct(Dif_H3K4Me1)-1,
+    D_Dif_ATAC = n_distinct(Dif_ATAC)-1,
+    D_H3K27AcTR = n_distinct(H3K27AcTR)-1,
+    D_H3K4Me3TR = n_distinct(H3K4Me3TR)-1,
+    D_ATACTR = n_distinct(ATACTR)-1,
+    D_H3K4Me1TR = n_distinct(H3K4Me1TR)-1
+  ) %>%
+  ungroup() %>%
+  distinct(Int_ID, DE_genes, .keep_all = TRUE) %>% 
+  mutate(KReg = paste0("KReg", row_number() + 524685)) %>% # number based on total # of regulatory elements
+  dplyr::select(chromosome, start, end, Int_ID, DE_genes, D_Dif_H3K27Ac, D_Dif_H3K4Me3, D_Dif_H3K4Me1, D_Dif_ATAC, D_H3K27AcTR, D_H3K4Me3TR, D_ATACTR, D_H3K4Me1TR, KReg)
+
+
+
+```
